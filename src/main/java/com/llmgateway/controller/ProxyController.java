@@ -158,4 +158,24 @@ public class ProxyController {
                         team, requested.model(), served.get(),
                         inputTokens.get(), outputTokens.get(), estimate, start).subscribe());
     }
+
+    private Mono<Void> finalizeStream(Team team, String requestedModel, String served,
+                                      int inTok, int outTok, int estimate, long startNanos) {
+        long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
+        if (inTok == 0 && outTok == 0) {
+            // Stream failed before producing output; record an error and stop.
+            metrics.recordRequest(team.getName(), requestedModel, served, PROVIDER, "error");
+            return Mono.empty();
+        }
+        BigDecimal cost = costCalculator.cost(served, inTok, outTok);
+        return budget.recordUsage(team, served, PROVIDER, inTok, outTok, cost)
+                .then(rateLimiter.reconcileTokenUsage(team, estimate, (long) inTok + outTok))
+                .then(Mono.fromRunnable(() -> {
+                    metrics.recordRequest(team.getName(), requestedModel, served, PROVIDER, "success");
+                    metrics.recordLatency(served, PROVIDER, latencyMs);
+                    metrics.recordTokens(team.getName(), served, inTok, outTok);
+                    metrics.recordCost(team.getName(), served, cost);
+                }))
+                .then();
+    }
 }
