@@ -34,6 +34,28 @@ public class TeamAuthFilter implements WebFilter {
         this.teamService = teamService;
     }
 
+    @Override
+    public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
+        String path = exchange.getRequest().getPath().value();
+        if (!path.startsWith("/v1/")) {
+            return chain.filter(exchange);
+        }
+
+        String apiKey = extractBearer(exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION));
+        RequestPriority priority = RequestPriority.fromHeader(
+                exchange.getRequest().getHeaders().getFirst("X-Priority"));
+
+        return teamService.authenticate(apiKey)
+                .flatMap(team -> {
+                    if (team.isBudgetExhausted()) {
+                        return Mono.error(new BudgetExhaustedException(
+                                "Daily budget exhausted for team " + team.getName()));
+                    }
+                    exchange.getAttributes().put(RequestContext.TEAM, team);
+                    exchange.getAttributes().put(RequestContext.PRIORITY, priority);
+                    return chain.filter(exchange);
+                });
+    }
 
     private String extractBearer(String header) {
         if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
