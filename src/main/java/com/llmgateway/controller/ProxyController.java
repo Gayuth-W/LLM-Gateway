@@ -82,6 +82,7 @@ public class ProxyController {
         this.json = json;
     }
 
+
     // ---------- non-streaming ----------
 
     private Mono<ResponseEntity<?>> syncResponse(Team team, LLMRequest requested, int estimate) {
@@ -117,6 +118,7 @@ public class ProxyController {
                         .header("X-Request-Tokens", Integer.toString(resp.totalTokens()))
                         .body((Object) bodyJson));
     }
+
     // ---------- streaming (SSE) ----------
 
     private ResponseEntity<?> streamingResponse(Team team, LLMRequest requested, int estimate) {
@@ -177,5 +179,75 @@ public class ProxyController {
                     metrics.recordCost(team.getName(), served, cost);
                 }))
                 .then();
+    }
+
+    private Map<String, Object> openAiResponse(String model, String content, int inTok, int outTok) {
+        Map<String, Object> message = new LinkedHashMap<>();
+        message.put("role", "assistant");
+        message.put("content", content);
+
+        Map<String, Object> choice = new LinkedHashMap<>();
+        choice.put("index", 0);
+        choice.put("message", message);
+        choice.put("finish_reason", "stop");
+
+        Map<String, Object> usage = new LinkedHashMap<>();
+        usage.put("prompt_tokens", inTok);
+        usage.put("completion_tokens", outTok);
+        usage.put("total_tokens", inTok + outTok);
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("id", "chatcmpl-" + UUID.randomUUID());
+        response.put("object", "chat.completion");
+        response.put("model", model);
+        response.put("choices", List.of(choice));
+        response.put("usage", usage);
+        return response;
+    }
+
+    /** One streaming chunk in OpenAI chat.completion.chunk shape. */
+    private String chunkJson(String model, String contentDelta, String finishReason) {
+        Map<String, Object> delta = new LinkedHashMap<>();
+        if (contentDelta != null && !contentDelta.isEmpty()) {
+            delta.put("content", contentDelta);
+        }
+        Map<String, Object> choice = new LinkedHashMap<>();
+        choice.put("index", 0);
+        choice.put("delta", delta);
+        choice.put("finish_reason", finishReason);
+
+        Map<String, Object> chunk = new LinkedHashMap<>();
+        chunk.put("id", "chatcmpl-" + UUID.randomUUID());
+        chunk.put("object", "chat.completion.chunk");
+        chunk.put("model", model);
+        chunk.put("choices", List.of(choice));
+        return write(chunk);
+    }
+
+    private String errorJson(Throwable err) {
+        Map<String, Object> error = new LinkedHashMap<>();
+        error.put("message", err.getMessage() == null ? err.getClass().getSimpleName() : err.getMessage());
+        error.put("type", "upstream_error");
+        return write(Map.of("error", error));
+    }
+
+    private String write(Object value) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    private ServerSentEvent<String> sse(String data) {
+        return ServerSentEvent.<String>builder().data(data).build();
+    }
+
+    private ServerSentEvent<String> sseEvent(String event, String data) {
+        return ServerSentEvent.<String>builder().event(event).data(data).build();
+    }
+
+    private ServerSentEvent<String> sseDone() {
+        return ServerSentEvent.<String>builder().data("[DONE]").build();
     }
 }
