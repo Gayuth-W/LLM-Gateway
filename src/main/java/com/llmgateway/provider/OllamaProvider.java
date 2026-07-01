@@ -103,4 +103,23 @@ public class OllamaProvider implements LLMProvider {
                 .then()
                 .onErrorMap(this::mapError);
     }
+
+    // ---- mapping helpers ----
+
+    private OllamaChatRequest toOllama(LLMRequest request, boolean stream) {
+        List<OllamaMessage> messages = request.messages().stream()
+                .map(this::toOllamaMessage)
+                .toList();
+        OllamaOptions options = new OllamaOptions(request.temperature(), request.maxTokens());
+        return new OllamaChatRequest(request.model(), messages, stream, options);
+    }
+
+    private OllamaMessage toOllamaMessage(ChatMessage m) {
+        return new OllamaMessage(m.role(), m.content());
+    }
+
+    private long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
+    }
+
 }
