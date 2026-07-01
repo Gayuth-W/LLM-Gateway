@@ -90,7 +90,7 @@ public class ProxyController {
         return router.route(team, enriched)
                 .flatMap(resp -> finalizeSync(team, requested, resp, estimate, start));
     }
-    
+
     private Mono<ResponseEntity<?>> finalizeSync(Team team, LLMRequest requested, LLMResponse resp,
                                                  int estimate, long startNanos) {
         String served = resp.model();
@@ -117,4 +117,14 @@ public class ProxyController {
                         .header("X-Request-Tokens", Integer.toString(resp.totalTokens()))
                         .body((Object) bodyJson));
     }
-}
+
+    
+    // ---------- streaming (SSE) ----------
+
+    private ResponseEntity<?> streamingResponse(Team team, LLMRequest requested, int estimate) {
+        Flux<ServerSentEvent<String>> body = streamBody(team, requested, estimate);
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header("X-Streaming", "true")
+
+    }
