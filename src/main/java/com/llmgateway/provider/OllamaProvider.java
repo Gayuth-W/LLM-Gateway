@@ -45,4 +45,25 @@ public class OllamaProvider implements LLMProvider {
         return "ollama";
     }
 
+    @Override
+    public Mono<LLMResponse> complete(LLMRequest request) {
+        long start = System.nanoTime(); //measure latency
+        OllamaChatRequest body = toOllama(request, false);//convert my unified format to ollama format
+        return ollamaWebClient.post()
+                .uri("/api/chat")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(OllamaChatResponse.class)
+                .timeout(props.ollama().requestTimeout())
+                .map(resp -> new LLMResponse(
+                        request.model(),
+                        resp.contentOrEmpty(),
+                        resp.inputTokens(),
+                        resp.outputTokens(),
+                        elapsedMs(start),
+                        false))
+                .onErrorMap(this::mapError);
+    }
+
 }
