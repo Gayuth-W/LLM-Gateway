@@ -65,7 +65,7 @@ public class OllamaProvider implements LLMProvider {
                         false))
                 .onErrorMap(this::mapError);
     }
-    
+
     @Override
     public Flux<LLMStreamChunk> stream(LLMRequest request) {
         OllamaChatRequest body = toOllama(request, true);
@@ -86,4 +86,21 @@ public class OllamaProvider implements LLMProvider {
                 .onErrorMap(this::mapError);
     }
 
+    @Override
+    public Mono<Void> ping(String model) {
+        OllamaChatRequest body = new OllamaChatRequest(
+                model,
+                List.of(new OllamaMessage("user", "ping")),
+                false,
+                new OllamaOptions(0.0, props.resilience().healthCheck().pingNumPredict()));
+        return ollamaWebClient.post()
+                .uri("/api/chat")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToMono(OllamaChatResponse.class)
+                .timeout(props.ollama().requestTimeout())
+                .then()
+                .onErrorMap(this::mapError);
+    }
 }
