@@ -49,4 +49,19 @@ public class EnrichmentService {
         }
         return request.withMessages(messages);
     }
+
+    public boolean hasDisclaimer(Team team) {
+        GatewayProperties.Enrichment.Profile profile = profileFor(team);
+        return profile != null && profile.disclaimerSuffix() != null && !profile.disclaimerSuffix().isBlank();
+    }
+
+    public String disclaimer(Team team) {
+        GatewayProperties.Enrichment.Profile profile = profileFor(team);
+        return profile == null ? "" : (profile.disclaimerSuffix() == null ? "" : profile.disclaimerSuffix());
+    }
+
+    /** Append the disclaimer to a finished (non-streaming) response body. */
+    public String applyDisclaimer(Team team, String content) {
+        return hasDisclaimer(team) ? content + disclaimer(team) : content;
+    }
 }
