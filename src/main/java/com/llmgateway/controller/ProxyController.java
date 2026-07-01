@@ -117,8 +117,6 @@ public class ProxyController {
                         .header("X-Request-Tokens", Integer.toString(resp.totalTokens()))
                         .body((Object) bodyJson));
     }
-
-    
     // ---------- streaming (SSE) ----------
 
     private ResponseEntity<?> streamingResponse(Team team, LLMRequest requested, int estimate) {
@@ -126,5 +124,38 @@ public class ProxyController {
         return ResponseEntity.ok()
                 .contentType(MediaType.TEXT_EVENT_STREAM)
                 .header("X-Streaming", "true")
-
+                .body(body);
     }
+
+    private Flux<ServerSentEvent<String>> streamBody(Team team, LLMRequest requested, int estimate) {
+        LLMRequest enriched = enrichment.enrichRequest(team, requested);
+        String disclaimer = enrichment.disclaimer(team);
+        long start = System.nanoTime();
+        AtomicReference<String> served = new AtomicReference<>(requested.model());
+        AtomicInteger inputTokens = new AtomicInteger();
+        AtomicInteger outputTokens = new AtomicInteger();
+
+        Flux<ServerSentEvent<String>> deltas = router.routeStream(team, enriched)
+                .flatMap(chunk -> {
+                    served.set(chunk.model());
+                    if (chunk.done()) {
+                        inputTokens.set(chunk.inputTokens());
+                        outputTokens.set(chunk.outputTokens());
+                        List<ServerSentEvent<String>> tail = new ArrayList<>();
+                        if (disclaimer != null && !disclaimer.isBlank()) {
+                            tail.add(sse(chunkJson(chunk.model(), disclaimer, null)));
+                        }
+                        tail.add(sse(chunkJson(chunk.model(), "", "stop")));
+                        return Flux.fromIterable(tail);
+                    }
+                    return Flux.just(sse(chunkJson(chunk.model(), chunk.contentDelta(), null)));
+                })
+                .onErrorResume(err -> Flux.just(sseEvent("error", errorJson(err))));
+
+        return deltas
+                .concatWith(Flux.just(sseDone()))
+                .doOnComplete(() -> finalizeStream(
+                        team, requested.model(), served.get(),
+                        inputTokens.get(), outputTokens.get(), estimate, start).subscribe());
+    }
+}
