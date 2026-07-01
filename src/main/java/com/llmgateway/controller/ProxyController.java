@@ -82,4 +82,12 @@ public class ProxyController {
         this.json = json;
     }
 
+    // ---------- non-streaming ----------
+
+    private Mono<ResponseEntity<?>> syncResponse(Team team, LLMRequest requested, int estimate) {
+        LLMRequest enriched = enrichment.enrichRequest(team, requested);
+        long start = System.nanoTime();
+        return router.route(team, enriched)
+                .flatMap(resp -> finalizeSync(team, requested, resp, estimate, start));
+    }
 }
