@@ -47,8 +47,8 @@ public class OllamaProvider implements LLMProvider {
 
     @Override
     public Mono<LLMResponse> complete(LLMRequest request) {
-        long start = System.nanoTime(); //measure latency
-        OllamaChatRequest body = toOllama(request, false);//convert my unified format to ollama format
+        long start = System.nanoTime();
+        OllamaChatRequest body = toOllama(request, false);
         return ollamaWebClient.post()
                 .uri("/api/chat")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -122,4 +122,37 @@ public class OllamaProvider implements LLMProvider {
         return (System.nanoTime() - startNanos) / 1_000_000;
     }
 
+    /**
+     * Normalise transport/HTTP failures into the gateway taxonomy. The retryable
+     * flag on each exception is what drives retry-vs-fail-fast downstream.
+     */
+    private Throwable mapError(Throwable t) {
+        if (t instanceof UpstreamException) {
+            return t; // already normalised
+        }
+        if (t instanceof TimeoutException) {
+            return new UpstreamTimeoutException("Ollama request timed out", t);
+        }
+        if (t instanceof WebClientResponseException w) {
+            int sc = w.getStatusCode().value();
+            if (sc == 429) {
+                return new UpstreamRateLimitException("Ollama returned 429");
+            }
+            if (sc == 401 || sc == 403) {
+                return new UpstreamAuthException("Ollama auth rejected (" + sc + ")");
+            }
+            if (sc == 404) {
+                // Model not loaded/pulled: retrying the same model is pointless -> fail fast,
+                // which lets the router fall back to another model.
+                return new UpstreamException("Ollama model unavailable (404): " + w.getResponseBodyAsString(), false);
+            }
+            // 5xx and anything else: transient, retryable.
+            return new UpstreamException("Ollama HTTP " + sc, true);
+        }
+        if (t instanceof WebClientRequestException) {
+            // Connection refused / reset / DNS: transient.
+            return new UpstreamException("Ollama connection error: " + t.getMessage(), true);
+        }
+        return new UpstreamException("Ollama call failed: " + t.getMessage(), true);
+    }
 }
