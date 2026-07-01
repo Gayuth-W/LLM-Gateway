@@ -65,5 +65,25 @@ public class OllamaProvider implements LLMProvider {
                         false))
                 .onErrorMap(this::mapError);
     }
+    
+    @Override
+    public Flux<LLMStreamChunk> stream(LLMRequest request) {
+        OllamaChatRequest body = toOllama(request, true);
+        // Ollama streams newline-delimited JSON (application/x-ndjson). Spring's
+        // non-blocking Jackson decoder tokenises one OllamaChatResponse per line,
+        // correctly across network buffer boundaries.
+        return ollamaWebClient.post()
+                .uri("/api/chat")
+                .contentType(MediaType.APPLICATION_JSON)
+                .accept(MediaType.APPLICATION_NDJSON)
+                .bodyValue(body)
+                .retrieve()
+                .bodyToFlux(OllamaChatResponse.class)
+                .timeout(props.ollama().requestTimeout())
+                .map(resp -> resp.done()
+                        ? LLMStreamChunk.terminal(request.model(), resp.inputTokens(), resp.outputTokens())
+                        : LLMStreamChunk.delta(request.model(), resp.contentOrEmpty()))
+                .onErrorMap(this::mapError);
+    }
 
 }
