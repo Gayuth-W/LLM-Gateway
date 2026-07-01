@@ -31,4 +31,22 @@ public class EnrichmentService {
         }
         return props.enrichment().profile(team.getEnrichmentProfile());
     }
+
+    /** Returns a request with the team's system prefix applied (or the original if none). */
+    public LLMRequest enrichRequest(Team team, LLMRequest request) {
+        GatewayProperties.Enrichment.Profile profile = profileFor(team);
+        if (profile == null || profile.systemPrefix() == null || profile.systemPrefix().isBlank()) {
+            return request;
+        }
+        String prefix = profile.systemPrefix();
+        List<ChatMessage> messages = new ArrayList<>(request.messages());
+
+        if (!messages.isEmpty() && "system".equals(messages.get(0).role())) {
+            ChatMessage existing = messages.get(0);
+            messages.set(0, new ChatMessage("system", prefix + "\n\n" + existing.content()));
+        } else {
+            messages.add(0, ChatMessage.system(prefix));
+        }
+        return request.withMessages(messages);
+    }
 }
