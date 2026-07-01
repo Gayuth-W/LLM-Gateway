@@ -90,4 +90,31 @@ public class ProxyController {
         return router.route(team, enriched)
                 .flatMap(resp -> finalizeSync(team, requested, resp, estimate, start));
     }
+    
+    private Mono<ResponseEntity<?>> finalizeSync(Team team, LLMRequest requested, LLMResponse resp,
+                                                 int estimate, long startNanos) {
+        String served = resp.model();
+        String content = enrichment.applyDisclaimer(team, resp.content());
+        BigDecimal cost = costCalculator.cost(served, resp.inputTokens(), resp.outputTokens());
+        long latencyMs = (System.nanoTime() - startNanos) / 1_000_000;
+        Map<String, Object> bodyJson = openAiResponse(served, content, resp.inputTokens(), resp.outputTokens());
+
+        return budget.recordUsage(team, served, PROVIDER, resp.inputTokens(), resp.outputTokens(), cost)
+                .then(rateLimiter.reconcileTokenUsage(team, estimate, resp.totalTokens()))
+                .then(Mono.fromRunnable(() -> {
+                    metrics.recordRequest(team.getName(), requested.model(), served, PROVIDER, "success");
+                    metrics.recordLatency(served, PROVIDER, latencyMs);
+                    metrics.recordTokens(team.getName(), served, resp.inputTokens(), resp.outputTokens());
+                    metrics.recordCost(team.getName(), served, cost);
+                    telemetry.tag(SpanAttributes.SERVED_MODEL, served);
+                    telemetry.tag(SpanAttributes.FALLBACK, Boolean.toString(resp.fallbackTriggered()));
+                    telemetry.tag(SpanAttributes.INPUT_TOKENS, resp.inputTokens());
+                    telemetry.tag(SpanAttributes.OUTPUT_TOKENS, resp.outputTokens());
+                }))
+                .thenReturn(ResponseEntity.ok()
+                        .header("X-Provider-Used", served)
+                        .header("X-Gateway-Fallback", Boolean.toString(resp.fallbackTriggered()))
+                        .header("X-Request-Tokens", Integer.toString(resp.totalTokens()))
+                        .body((Object) bodyJson));
+    }
 }
