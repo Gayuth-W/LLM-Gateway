@@ -118,5 +118,18 @@ public class AdminTeamController {
         });
     }
 
-
+    /** Shared load -> apply -> persist -> invalidate -> audit -> view flow. */
+    private Mono<TeamView> mutate(Long id, String actor, String action, java.util.function.Consumer<Team> change) {
+        return teamService.byId(id)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found")))
+                .flatMap(team -> {
+                    change.accept(team);
+                    team.setUpdatedAt(OffsetDateTime.now());
+                    return teamRepository.save(team);
+                })
+                .doOnNext(teamService::invalidate)
+                .flatMap(saved -> auditService.record(saved.getId(), actor, action, "")
+                        .then(budgetService.spentToday(saved.getId()))
+                        .map(spent -> TeamView.from(saved, spent)));
+    }
 }
