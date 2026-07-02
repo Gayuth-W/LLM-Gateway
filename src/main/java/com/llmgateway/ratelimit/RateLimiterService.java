@@ -72,7 +72,15 @@ public class RateLimiterService {
     private static final Logger log = LoggerFactory.getLogger(RateLimiterService.class);
 
     private final AsyncProxyManager<String> proxyManager;
-
+    
+    /** Outcome of an admission check. */
+    public record Decision(boolean allowed, long retryAfterSeconds) {
+        static Decision allow() { return new Decision(true, 0); }
+        static Decision deny(ConsumptionProbe probe) {
+            long secs = Math.max(1, probe.getNanosToWaitForRefill() / 1_000_000_000L);
+            return new Decision(false, secs);
+        }
+    }
 
     /**
      * Correct the TPM bucket after the real token count is known. Surplus is debited
@@ -94,7 +102,7 @@ public class RateLimiterService {
                 .onErrorResume(e -> { log.warn("TPM refund failed", e); return Mono.empty(); });
     }
 
-    
+
     // ---- Bucket4j plumbing ----
 
     private Mono<ConsumptionProbe> consume(String key, BucketConfiguration cfg, long tokens) {
