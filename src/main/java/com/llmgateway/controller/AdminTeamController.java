@@ -96,5 +96,16 @@ public class AdminTeamController {
         });
     }
 
+    @PatchMapping("/{id}/budget")
+    public Mono<TeamView> updateBudget(@PathVariable Long id,
+                                       @Valid @RequestBody UpdateBudgetRequest req,
+                                       @RequestHeader(value = "X-Admin-User", defaultValue = "admin") String actor) {
+        return mutate(id, actor, "update_budget", team -> {
+            if (req.dailyBudgetUsd() != null) team.setDailyBudgetUsd(req.dailyBudgetUsd());
+            if (req.monthlyBudgetUsd() != null) team.setMonthlyBudgetUsd(req.monthlyBudgetUsd());
+            // Raising the budget clears a prior exhaustion flag.
+            team.setBudgetExhausted(false);
+        });
+    }
 
 }
