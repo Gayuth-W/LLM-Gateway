@@ -85,5 +85,16 @@ public class AdminTeamController {
                         .thenReturn(TeamView.from(saved, BigDecimal.ZERO)));
     }
 
+    @PatchMapping("/{id}/limits")
+    public Mono<TeamView> updateLimits(@PathVariable Long id,
+                                       @Valid @RequestBody UpdateLimitsRequest req,
+                                       @RequestHeader(value = "X-Admin-User", defaultValue = "admin") String actor) {
+        return mutate(id, actor, "update_limits", team -> {
+            if (req.rpmLimit() != null) team.setRpmLimit(req.rpmLimit());
+            if (req.tpmLimit() != null) team.setTpmLimit(req.tpmLimit());
+            if (req.lowPriorityRpm() != null) team.setLowPriorityRpm(req.lowPriorityRpm());
+        });
+    }
+
 
 }
