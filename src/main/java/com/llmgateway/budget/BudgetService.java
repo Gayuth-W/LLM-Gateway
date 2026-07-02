@@ -33,6 +33,43 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *      lock-free queue (O(1), no DB write on the hot path). A scheduled flush drains
  *      and aggregates the queue, then UPSERTs into spending_records. Worst-case loss
  *      on crash is one flush interval of reporting data; live enforcement is unaffected.
+ *
+ *
+ *
+ * LLM Request Completes
+ *         │
+ *         ▼
+ *   recordUsage()
+ *         │
+ *         ├── Queue spending delta in memory
+ *         │
+ *         └── Increment Redis daily spending
+ *                     │
+ *                     ▼
+ *             evaluateThresholds()
+ *                     │
+ *          ┌──────────┴──────────┐
+ *          │                     │
+ *          ▼                     ▼
+ *     Budget Warning       Budget Exhausted
+ *          │                     │
+ *          ▼                     ▼
+ *    Send Warning Alert    Update DB + Send Alert
+ *
+ *
+ *    Every N seconds
+ *         │
+ *         ▼
+ *       flush()
+ *         │
+ *         ▼
+ *    Drain queue
+ *         │
+ *         ▼
+ * Aggregate spending records
+ *         │
+ *         ▼
+ * UPSERT into PostgreSQL
  */
 @Service
 public class BudgetService {
