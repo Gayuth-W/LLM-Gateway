@@ -87,6 +87,33 @@ public class RateLimiterService {
     }
 
     /**
+     * Admit (or reject) a request, debiting the RPM and TPM buckets. On TPM rejection the
+     * RPM debit is refunded so a throttled request does not consume request allowance.
+     */
+    public Mono<Decision> tryAdmit(Team team, RequestPriority priority, int estimatedTokens) {
+        boolean low = priority == RequestPriority.LOW;
+        String rpmKey = low ? BucketKeys.lowPriorityRpm(team.getId()) : BucketKeys.rpm(team.getId());
+        BucketConfiguration rpmCfg = low
+                ? perMinute(team.getLowPriorityRpm())
+                : perMinute(team.getRpmLimit());
+        String tpmKey = BucketKeys.tpm(team.getId());
+        BucketConfiguration tpmCfg = perMinute(team.getTpmLimit());
+        int tpmTokens = Math.max(1, estimatedTokens);
+
+        return consume(rpmKey, rpmCfg, 1).flatMap(rpmProbe -> {
+            if (!rpmProbe.isConsumed()) {
+                return Mono.just(Decision.deny(rpmProbe));
+            }
+            return consume(tpmKey, tpmCfg, tpmTokens).flatMap(tpmProbe -> {
+                if (!tpmProbe.isConsumed()) {
+                    return refund(rpmKey, rpmCfg, 1).thenReturn(Decision.deny(tpmProbe));
+                }
+                return Mono.just(Decision.allow());
+            });
+        });
+    }
+
+    /**
      * Correct the TPM bucket after the real token count is known. Surplus is debited
      * (may push the bucket negative, throttling the next minute); over-estimates are refunded.
      */
@@ -105,7 +132,6 @@ public class RateLimiterService {
         return Mono.fromFuture(() -> bucket.addTokens(-delta))
                 .onErrorResume(e -> { log.warn("TPM refund failed", e); return Mono.empty(); });
     }
-
 
     // ---- Bucket4j plumbing ----
 
