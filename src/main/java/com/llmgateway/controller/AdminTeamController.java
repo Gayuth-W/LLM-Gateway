@@ -58,5 +58,32 @@ public class AdminTeamController {
                 .flatMap(team -> budgetService.spentToday(id).map(spent -> TeamView.from(team, spent)));
     }
 
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<TeamView> create(@Valid @RequestBody CreateTeamRequest req,
+                                 @RequestHeader(value = "X-Admin-User", defaultValue = "admin") String actor) {
+        Team team = new Team();
+        team.setApiKey(req.apiKey());
+        team.setName(req.name());
+        team.setAllowedModels(req.allowedModels() == null ? "" : String.join(",", req.allowedModels()));
+        team.setRpmLimit(req.rpmLimit());
+        team.setTpmLimit(req.tpmLimit());
+        team.setLowPriorityRpm(req.lowPriorityRpm());
+        team.setDailyBudgetUsd(req.dailyBudgetUsd() == null ? BigDecimal.ZERO : req.dailyBudgetUsd());
+        team.setMonthlyBudgetUsd(req.monthlyBudgetUsd() == null ? BigDecimal.ZERO : req.monthlyBudgetUsd());
+        team.setBudgetExhausted(false);
+        team.setEnrichmentProfile(req.enrichmentProfile());
+        team.setAlertThresholdPct(80);
+        OffsetDateTime now = OffsetDateTime.now();
+        team.setCreatedAt(now);
+        team.setUpdatedAt(now);
+
+        return teamRepository.save(team)
+                .doOnNext(saved -> teamService.invalidate(saved))
+                .flatMap(saved -> auditService
+                        .record(saved.getId(), actor, "create_team", "name=" + saved.getName())
+                        .thenReturn(TeamView.from(saved, BigDecimal.ZERO)));
+    }
+
 
 }
