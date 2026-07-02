@@ -72,7 +72,11 @@ public class RateLimiterService {
     private static final Logger log = LoggerFactory.getLogger(RateLimiterService.class);
 
     private final AsyncProxyManager<String> proxyManager;
-    
+
+    public RateLimiterService(LettuceBasedProxyManager<String> proxyManager) {
+        this.proxyManager = proxyManager.asAsync();
+    }
+
     /** Outcome of an admission check. */
     public record Decision(boolean allowed, long retryAfterSeconds) {
         static Decision allow() { return new Decision(true, 0); }
