@@ -51,5 +51,12 @@ public class AdminTeamController {
                         .map(spent -> TeamView.from(team, spent)));
     }
 
+    @GetMapping("/{id}")
+    public Mono<TeamView> get(@PathVariable Long id) {
+        return teamService.byId(id)
+                .switchIfEmpty(Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND, "Team not found")))
+                .flatMap(team -> budgetService.spentToday(id).map(spent -> TeamView.from(team, spent)));
+    }
+
 
 }
