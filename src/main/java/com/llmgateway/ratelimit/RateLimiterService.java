@@ -73,6 +73,28 @@ public class RateLimiterService {
 
     private final AsyncProxyManager<String> proxyManager;
 
+
+    /**
+     * Correct the TPM bucket after the real token count is known. Surplus is debited
+     * (may push the bucket negative, throttling the next minute); over-estimates are refunded.
+     */
+    public Mono<Void> reconcileTokenUsage(Team team, int estimatedTokens, long actualTokens) {
+        long delta = actualTokens - Math.max(1, estimatedTokens);
+        if (delta == 0) {
+            return Mono.empty();
+        }
+        String tpmKey = BucketKeys.tpm(team.getId());
+        BucketConfiguration tpmCfg = perMinute(team.getTpmLimit());
+        AsyncBucketProxy bucket = bucket(tpmKey, tpmCfg);
+        if (delta > 0) {
+            return Mono.fromFuture(() -> bucket.consumeIgnoringRateLimits(delta)).then()
+                    .onErrorResume(e -> { log.warn("TPM surplus debit failed", e); return Mono.empty(); });
+        }
+        return Mono.fromFuture(() -> bucket.addTokens(-delta))
+                .onErrorResume(e -> { log.warn("TPM refund failed", e); return Mono.empty(); });
+    }
+
+    
     // ---- Bucket4j plumbing ----
 
     private Mono<ConsumptionProbe> consume(String key, BucketConfiguration cfg, long tokens) {
