@@ -108,4 +108,15 @@ public class AdminTeamController {
         });
     }
 
+    @PatchMapping("/{id}/alert-threshold")
+    public Mono<TeamView> updateAlertThreshold(@PathVariable Long id,
+                                               @Valid @RequestBody AlertThresholdRequest req,
+                                               @RequestHeader(value = "X-Admin-User", defaultValue = "admin") String actor) {
+        return mutate(id, actor, "update_alert_threshold", team -> {
+            team.setAlertThresholdPct(req.alertThresholdPct());
+            if (req.slackChannel() != null) team.setSlackChannel(req.slackChannel());
+        });
+    }
+
+
 }
