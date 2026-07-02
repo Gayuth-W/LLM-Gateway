@@ -69,6 +69,20 @@ public class BudgetService {
         long out;
         BigDecimal cost = BigDecimal.ZERO;
     }
+
+    /** Called after every successful completion. Updates live counter + queues durable delta. */
+    public Mono<Void> recordUsage(Team team, String model, String provider,
+                                  long inputTokens, long outputTokens, BigDecimal cost) {
+        LocalDate day = LocalDate.now();
+        flushQueue.offer(new SpendDelta(team.getId(), day, model, provider, inputTokens, outputTokens, cost));
+
+        String key = aggKey(team.getId(), day);
+        return redis.opsForValue().increment(key, cost.doubleValue())
+                .flatMap(newTotal -> redis.expire(key, Duration.ofDays(2)).thenReturn(newTotal))
+                .flatMap(newTotal -> evaluateThresholds(team, day, newTotal))
+                .then();
+    }
+
     /** Live spend for today, in USD. */
     public Mono<BigDecimal> spentToday(Long teamId) {
         return redis.opsForValue().get(aggKey(teamId, LocalDate.now()))
@@ -76,6 +90,31 @@ public class BudgetService {
                 .defaultIfEmpty(BigDecimal.ZERO);
     }
 
+    //Checks whether spending crossed configured budget thresholds.
+    private Mono<Void> evaluateThresholds(Team team, LocalDate day, double newTotal) {
+        double budget = team.getDailyBudgetUsd() == null ? 0.0 : team.getDailyBudgetUsd().doubleValue();
+        if (budget <= 0.0) {
+            return Mono.empty();
+        }
+        if (newTotal >= budget) {
+            return firstTime(key(team.getId(), day, "exhausted-alerted"))
+                    .flatMap(first -> {
+                        Mono<Void> markDb = teamRepo.updateBudgetExhausted(team.getId(), true).then();
+                        if (first) {
+                            return markDb.then(alertService.budgetExhausted(team, BigDecimal.valueOf(newTotal)));
+                        }
+                        return markDb;
+                    });
+        }
+        double pct = newTotal / budget;
+        if (pct * 100.0 >= props.budget().warnThresholdPct()) {
+            return firstTime(key(team.getId(), day, "warned"))
+                    .flatMap(first -> first
+                            ? alertService.budgetWarning(team, BigDecimal.valueOf(newTotal), pct)
+                            : Mono.empty());
+        }
+        return Mono.empty();
+    }
 
     /** Atomically claims a one-shot flag; true only for the caller that set it. */
     private Mono<Boolean> firstTime(String flagKey) {
