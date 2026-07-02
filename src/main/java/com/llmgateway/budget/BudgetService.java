@@ -45,6 +45,7 @@ public class BudgetService {
     private final AlertService alertService;
     private final GatewayProperties props;
 
+    private final Queue<SpendDelta> flushQueue = new ConcurrentLinkedQueue<>();
 
     public BudgetService(ReactiveStringRedisTemplate redis,
                          SpendingRecordRepository spendingRepo,
@@ -56,6 +57,47 @@ public class BudgetService {
         this.teamRepo = teamRepo;
         this.alertService = alertService;
         this.props = props;
+    }
+
+    private record SpendDelta(Long teamId, LocalDate day, String model, String provider,
+                              long inputTokens, long outputTokens, BigDecimal cost) {}
+
+    private record FlushKey(Long teamId, LocalDate day, String model, String provider) {}
+
+    private static final class Accum {
+        long in;
+        long out;
+        BigDecimal cost = BigDecimal.ZERO;
+    }
+
+    /**
+     * Drains the queue, aggregates by (team, day, model, provider), and UPSERTs.
+     * Aggregation collapses many small deltas into one DB statement per bucket.
+     */
+    @Scheduled(fixedRateString = "${gateway.budget.flush-interval}")
+    public void flush() {
+        Map<FlushKey, Accum> aggregated = new HashMap<>();
+        SpendDelta delta;
+        int drained = 0;
+        while ((delta = flushQueue.poll()) != null) {
+            FlushKey k = new FlushKey(delta.teamId(), delta.day(), delta.model(), delta.provider());
+            Accum a = aggregated.computeIfAbsent(k, x -> new Accum());
+            a.in += delta.inputTokens();
+            a.out += delta.outputTokens();
+            a.cost = a.cost.add(delta.cost());
+            drained++;
+        }
+        if (aggregated.isEmpty()) {
+            return;
+        }
+        final int total = drained;
+        Flux.fromIterable(aggregated.entrySet())
+                .flatMap(e -> spendingRepo.upsertSpend(
+                        e.getKey().teamId(), e.getKey().day(), e.getKey().model(), e.getKey().provider(),
+                        e.getValue().in, e.getValue().out, e.getValue().cost))
+                .then()
+                .doOnError(err -> log.error("Spend flush failed; deltas dropped", err))
+                .subscribe(v -> log.debug("Flushed {} spend deltas into {} buckets", total, aggregated.size()));
     }
 
     //Generates Redis key for total daily spending
