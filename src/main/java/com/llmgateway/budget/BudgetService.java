@@ -70,6 +70,13 @@ public class BudgetService {
         BigDecimal cost = BigDecimal.ZERO;
     }
 
+    /** Atomically claims a one-shot flag; true only for the caller that set it. */
+    private Mono<Boolean> firstTime(String flagKey) {
+        return redis.opsForValue()
+                .setIfAbsent(flagKey, "1", Duration.ofDays(2))
+                .defaultIfEmpty(false);
+    }
+
     /**
      * Drains the queue, aggregates by (team, day, model, provider), and UPSERTs.
      * Aggregation collapses many small deltas into one DB statement per bucket.
