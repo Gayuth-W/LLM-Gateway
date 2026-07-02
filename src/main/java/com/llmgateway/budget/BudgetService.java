@@ -69,6 +69,13 @@ public class BudgetService {
         long out;
         BigDecimal cost = BigDecimal.ZERO;
     }
+    /** Live spend for today, in USD. */
+    public Mono<BigDecimal> spentToday(Long teamId) {
+        return redis.opsForValue().get(aggKey(teamId, LocalDate.now()))
+                .map(BigDecimal::new)
+                .defaultIfEmpty(BigDecimal.ZERO);
+    }
+
 
     /** Atomically claims a one-shot flag; true only for the caller that set it. */
     private Mono<Boolean> firstTime(String flagKey) {
