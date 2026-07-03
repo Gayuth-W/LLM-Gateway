@@ -57,4 +57,32 @@ public class CircuitBreakerEvents {
                 .onEntryReplaced(event -> attach(event.getNewEntry()));
     }
 
+
+    /**
+     * Attaches a state transition listener to a single circuit breaker.
+     *
+     * Every state change (CLOSED → OPEN → HALF_OPEN → CLOSED) is captured and:
+     *  - Logged for debugging/traceability
+     *  - Persisted into the database as a CircuitBreakerEvent
+     *  - Triggers alerting when the breaker opens (service degradation signal)
+     *
+     * This enables full observability of provider health behavior over time.
+     */    
+    private void attach(CircuitBreaker cb) {
+        cb.getEventPublisher().onStateTransition(event -> {
+            String model = cb.getName();
+            String from = event.getStateTransition().getFromState().name();
+            String to = event.getStateTransition().getToState().name();
+            log.info("Circuit breaker [{}] {} -> {}", model, from, to);
+
+            repository.save(new CircuitBreakerEvent(model, from, to))
+                    .doOnError(e -> log.warn("Failed to persist breaker event", e))
+                    .onErrorResume(e -> reactor.core.publisher.Mono.empty())
+                    .subscribe();
+
+            if (event.getStateTransition().getToState() == CircuitBreaker.State.OPEN) {
+                alertService.circuitBreakerOpened(model, from).subscribe();
+            }
+        });
+    }
 }
