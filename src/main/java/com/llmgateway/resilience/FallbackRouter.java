@@ -194,4 +194,15 @@ public class FallbackRouter {
         });
     }
 
+    // ---------- fallback bookkeeping ----------
+
+    //Records a fallback event for observability purposes by updating metrics
+    private Mono<Void> recordFallback(Team team, String requested, String served) {
+        metrics.recordFallback(requested, served);
+        return fallbackRepo.save(new FallbackEvent(
+                        team.getId(), requested, served, "primary unavailable"))
+                .doOnError(e -> log.warn("Failed to persist fallback event", e))
+                .onErrorResume(e -> Mono.empty())
+                .then();
+    }
 }
