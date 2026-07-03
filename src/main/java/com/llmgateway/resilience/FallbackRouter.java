@@ -1,10 +1,18 @@
 package com.llmgateway.resilience;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.llmgateway.config.GatewayProperties;
+import com.llmgateway.model.enums.ProviderStatus;
 import com.llmgateway.observability.GatewayMetrics;
 import com.llmgateway.provider.ProviderRegistry;
 import com.llmgateway.repository.FallbackEventRepository;
@@ -51,6 +59,37 @@ public class FallbackRouter {
         this.health = health;
         this.fallbackRepo = fallbackRepo;
         this.metrics = metrics;
+    }
+
+    // ---------- candidate resolution (BFS over the fallback graph) ----------
+
+    /** Ordered, de-duplicated, cycle-safe list of models to try, DOWN models removed. */
+    //Builds an ordered list of candidate models using Breadth-First Search 
+    List<String> healthyCandidates(String requested) {
+        List<String> order = new ArrayList<>();
+        Set<String> visited = new HashSet<>();
+        Deque<String> queue = new ArrayDeque<>();
+        queue.add(requested);
+        visited.add(requested);
+        while (!queue.isEmpty()) {
+            String model = queue.poll();
+            if (registry.isKnown(model)) {
+                order.add(model);
+            }
+            for (String next : props.fallbackChain(model)) {
+                if (visited.add(next)) {     // visited set prevents cycles + dups
+                    queue.add(next);
+                }
+            }
+        }
+        // Keep models that are not DOWN; preserve discovery order.
+        List<String> healthy = new ArrayList<>();
+        for (String model : order) {
+            if (health.status(model) != ProviderStatus.DOWN) {
+                healthy.add(model);
+            }
+        }
+        return healthy;
     }
 
 }
