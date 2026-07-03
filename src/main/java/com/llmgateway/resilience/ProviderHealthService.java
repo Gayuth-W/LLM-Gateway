@@ -78,4 +78,15 @@ public class ProviderHealthService {
                 .subscribe();
     }
 
+    private Mono<Void> checkModel(String model) {
+        LLMProvider provider = registry.forModel(model);
+        if (provider == null) {
+            return Mono.empty();
+        }
+        long start = System.nanoTime();
+        return provider.ping(model)
+                .then(Mono.defer(() -> recordOutcome(model, true, elapsedMs(start))))
+                .onErrorResume(e -> recordOutcome(model, false, elapsedMs(start)));
+    }
+
 }
