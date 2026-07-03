@@ -6,19 +6,33 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.llmgateway.config.GatewayProperties;
+import com.llmgateway.dto.LLMRequest;
+import com.llmgateway.dto.LLMResponse;
+import com.llmgateway.dto.LLMStreamChunk;
+import com.llmgateway.exception.ProviderUnavailableException;
+import com.llmgateway.model.FallbackEvent;
+import com.llmgateway.model.Team;
 import com.llmgateway.model.enums.ProviderStatus;
 import com.llmgateway.observability.GatewayMetrics;
+import com.llmgateway.provider.LLMProvider;
 import com.llmgateway.provider.ProviderRegistry;
 import com.llmgateway.repository.FallbackEventRepository;
 
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.reactor.circuitbreaker.operator.CircuitBreakerOperator;
+import io.github.resilience4j.reactor.retry.RetryOperator;
+import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryRegistry;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * Resolves which model actually serves a request and executes the call with
@@ -90,6 +104,19 @@ public class FallbackRouter {
             }
         }
         return healthy;
+    }
+
+    // ---------- non-streaming ----------
+
+    //Entry point for non-streaming requests.
+    //Resolves all healthy candidate models and begins the fallback execution chain
+    public Mono<LLMResponse> route(Team team, LLMRequest request) {
+        List<String> candidates = healthyCandidates(request.model());
+        if (candidates.isEmpty()) {
+            return Mono.error(new ProviderUnavailableException(
+                    "No healthy provider for model " + request.model()));
+        }
+        return attemptChain(team, request.model(), candidates, 0, request);
     }
 
 }
