@@ -152,4 +152,8 @@ public class ProviderHealthService {
         return latencies.computeIfAbsent(model, m -> new LatencyRingBuffer(RING_CAPACITY));
     }
 
+    //Calculates the elapsed time in milliseconds from a previously captured start timestamp
+    private long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
+    }
 }
