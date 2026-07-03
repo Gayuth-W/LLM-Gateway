@@ -1,0 +1,54 @@
+package com.llmgateway.resilience;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
+import com.llmgateway.config.GatewayProperties;
+import com.llmgateway.model.enums.ProviderStatus;
+import com.llmgateway.provider.ProviderRegistry;
+import com.llmgateway.repository.ProviderHealthEventRepository;
+import com.llmgateway.service.AlertService;
+
+/**
+ * Periodically probes every known model and classifies it HEALTHY / DEGRADED / DOWN
+ * from a rolling error-rate window. Real request outcomes feed the same window, so the
+ * classification reflects live traffic, not just synthetic pings.
+ *
+ *   - error rate over the window  -> {@link RollingWindow} (Redis ZSET sliding window)
+ *   - p50/p95/p99 latency         -> {@link LatencyRingBuffer} (in-memory ring buffer)
+ *
+ * Status transitions are persisted and alerted.
+ */
+@Service
+public class ProviderHealthService {
+
+    private static final Logger log = LoggerFactory.getLogger(ProviderHealthService.class);
+    private static final int RING_CAPACITY = 256;
+    private static final long MIN_SAMPLES = 3; // avoid flapping on a single failure
+
+    private final ProviderRegistry registry;
+    private final RollingWindow rollingWindow;
+    private final ProviderHealthEventRepository healthRepo;
+    private final AlertService alertService;
+    private final GatewayProperties props;
+
+    private final Map<String, ProviderStatus> statuses = new ConcurrentHashMap<>();
+    private final Map<String, LatencyRingBuffer> latencies = new ConcurrentHashMap<>();
+
+    public ProviderHealthService(ProviderRegistry registry,
+                                 RollingWindow rollingWindow,
+                                 ProviderHealthEventRepository healthRepo,
+                                 AlertService alertService,
+                                 GatewayProperties props) {
+        this.registry = registry;
+        this.rollingWindow = rollingWindow;
+        this.healthRepo = healthRepo;
+        this.alertService = alertService;
+        this.props = props;
+    }
+
+}
