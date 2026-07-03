@@ -160,5 +160,38 @@ public class FallbackRouter {
         return streamChain(team, request.model(), candidates, 0, request);
     }
 
+    //Attempts to stream responses from candidate models sequentially.
+    private Flux<LLMStreamChunk> streamChain(Team team, String requested,
+                                             List<String> candidates, int idx, LLMRequest request) {
+        if (idx >= candidates.size()) {
+            return Flux.error(new ProviderUnavailableException(
+                    "All providers exhausted for model " + requested));
+        }
+        String candidate = candidates.get(idx);
+        boolean isFallback = !candidate.equals(requested);
+
+        LLMProvider provider = registry.forModel(candidate);
+        CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker(candidate);
+        AtomicBoolean emitted = new AtomicBoolean(false);
+
+        Flux<LLMStreamChunk> attempt = provider.stream(request.withModel(candidate))
+                .doOnNext(c -> emitted.set(true))
+                .transformDeferred(CircuitBreakerOperator.of(cb))   // no retry: replay would duplicate output
+                .doOnComplete(() -> health.recordOutcome(candidate, true, 0L).subscribe());
+
+        if (isFallback) {
+            attempt = attempt.doOnSubscribe(s -> recordFallback(team, requested, candidate).subscribe());
+        }
+
+        return attempt.onErrorResume(err -> {
+            if (emitted.get()) {
+                // Bytes already on the wire; cannot transparently fall back.
+                return Flux.error(err);
+            }
+            log.warn("Streaming model {} failed before first chunk ({}); falling back", candidate, err.toString());
+            return health.recordOutcome(candidate, false, 0L)
+                    .thenMany(streamChain(team, requested, candidates, idx + 1, request));
+        });
+    }
 
 }
