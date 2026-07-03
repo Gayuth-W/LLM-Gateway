@@ -147,4 +147,9 @@ public class ProviderHealthService {
                                 stats.total())));
     }
 
+    //Returns the latency ring buffer associated with a model
+    private LatencyRingBuffer ring(String model) {
+        return latencies.computeIfAbsent(model, m -> new LatencyRingBuffer(RING_CAPACITY));
+    }
+
 }
