@@ -119,4 +119,33 @@ public class FallbackRouter {
         return attemptChain(team, request.model(), candidates, 0, request);
     }
 
+    private Mono<LLMResponse> attemptChain(Team team, String requested,
+                                           List<String> candidates, int idx, LLMRequest request) {
+        if (idx >= candidates.size()) {
+            return Mono.error(new ProviderUnavailableException(
+                    "All providers exhausted for model " + requested));
+        }
+        String candidate = candidates.get(idx);
+        boolean isFallback = !candidate.equals(requested);
+
+        LLMProvider provider = registry.forModel(candidate);
+        CircuitBreaker cb = circuitBreakerRegistry.circuitBreaker(candidate); //It protects the individual candidate model. If a specific model, if fails repeatedly, the circuit breaker opens and instantly trips any future requests to that model with a CallNotPermittedException
+        Retry retry = retryRegistry.retry(candidate);
+
+        return provider.complete(request.withModel(candidate))
+                .transformDeferred(CircuitBreakerOperator.of(cb))   // inner: records each attempt
+                .transformDeferred(RetryOperator.of(retry))          // outer: retries retryable failures
+                .map(resp -> new LLMResponse(candidate, resp.content(),
+                        resp.inputTokens(), resp.outputTokens(), resp.latencyMs(), isFallback))
+                .delayUntil(resp -> health.recordOutcome(candidate, true, resp.latencyMs()))
+                .delayUntil(resp -> isFallback
+                        ? recordFallback(team, requested, candidate)
+                        : Mono.empty())
+                .onErrorResume(err -> health.recordOutcome(candidate, false, 0L)
+                        .then(Mono.defer(() -> {
+                            log.warn("Model {} failed ({}); trying next candidate", candidate, err.toString());
+                            return attemptChain(team, requested, candidates, idx + 1, request);
+                        })));
+    }
+
 }
