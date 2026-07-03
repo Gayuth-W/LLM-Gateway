@@ -119,4 +119,20 @@ public class ProviderHealthService {
                 .onErrorResume(e -> { log.warn("Failed to persist health event", e); return Mono.empty(); });
     }
 
+    //Classifies a provider into HEALTHY, DEGRADED, or DOWN
+    private ProviderStatus classify(RollingWindow.WindowStats stats) {
+        if (stats.total() < MIN_SAMPLES) {
+            return ProviderStatus.HEALTHY;
+        }
+        double errorRate = stats.errorRate();
+        var hc = props.resilience().healthCheck();
+        if (errorRate >= hc.downErrorRate()) {
+            return ProviderStatus.DOWN;
+        }
+        if (errorRate >= hc.degradedErrorRate()) {
+            return ProviderStatus.DEGRADED;
+        }
+        return ProviderStatus.HEALTHY;
+    }
+
 }
