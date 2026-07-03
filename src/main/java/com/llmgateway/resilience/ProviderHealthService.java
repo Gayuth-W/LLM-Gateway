@@ -1,5 +1,6 @@
 package com.llmgateway.resilience;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -49,6 +50,11 @@ public class ProviderHealthService {
         this.healthRepo = healthRepo;
         this.alertService = alertService;
         this.props = props;
+    }
+    
+    //returns the duration of the rolling time window used to calculate the provder health metrics
+    private Duration window() {
+        return props.resilience().healthCheck().rollingWindow();
     }
 
 }
