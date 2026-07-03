@@ -148,4 +148,17 @@ public class FallbackRouter {
                         })));
     }
 
+    // ---------- streaming ----------
+
+    //Entry point for streaming requests. Resolves healthy candidate models and begins the streaming fallback chain.
+    public Flux<LLMStreamChunk> routeStream(Team team, LLMRequest request) {
+        List<String> candidates = healthyCandidates(request.model());
+        if (candidates.isEmpty()) {
+            return Flux.error(new ProviderUnavailableException(
+                    "No healthy provider for model " + request.model()));
+        }
+        return streamChain(team, request.model(), candidates, 0, request);
+    }
+
+
 }
