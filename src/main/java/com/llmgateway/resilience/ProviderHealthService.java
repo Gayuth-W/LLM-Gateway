@@ -135,4 +135,16 @@ public class ProviderHealthService {
         return ProviderStatus.HEALTHY;
     }
 
+    //Creates a snapshot of the health information for all models.
+    public Flux<ProviderHealthView> snapshot() {
+        return Flux.fromIterable(registry.knownModels())
+                .flatMap(model -> rollingWindow.stats(model, window())
+                        .map(stats -> new ProviderHealthView(
+                                model,
+                                status(model),
+                                stats.errorRate(),
+                                ring(model).p99(),
+                                stats.total())));
+    }
+
 }
