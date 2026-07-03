@@ -89,4 +89,13 @@ public class ProviderHealthService {
                 .onErrorResume(e -> recordOutcome(model, false, elapsedMs(start)));
     }
 
+    /** Feed one observation (from a ping or a real request) into the health signals. */
+    public Mono<Void> recordOutcome(String model, boolean success, long latencyMs) {
+        ring(model).record(latencyMs);
+        return rollingWindow.record(model, !success, window())
+                .then(rollingWindow.stats(model, window()))
+                .flatMap(stats -> evaluate(model, stats))
+                .then();
+    }
+
 }
