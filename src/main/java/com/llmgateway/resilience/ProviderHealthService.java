@@ -6,13 +6,20 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import com.llmgateway.config.GatewayProperties;
+import com.llmgateway.dto.admin.ProviderHealthView;
+import com.llmgateway.model.ProviderHealthEvent;
 import com.llmgateway.model.enums.ProviderStatus;
+import com.llmgateway.provider.LLMProvider;
 import com.llmgateway.provider.ProviderRegistry;
 import com.llmgateway.repository.ProviderHealthEventRepository;
 import com.llmgateway.service.AlertService;
+
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * Periodically probes every known model and classifies it HEALTHY / DEGRADED / DOWN
@@ -60,6 +67,15 @@ public class ProviderHealthService {
     /** Current classification (defaults to HEALTHY until proven otherwise). */
     public ProviderStatus status(String model) {
         return statuses.getOrDefault(model, ProviderStatus.HEALTHY);
+    }
+
+    /** Scheduled probe of all known models. */
+    @Scheduled(fixedRateString = "30000")
+    public void checkAll() {
+        Flux.fromIterable(registry.knownModels())
+                .flatMap(this::checkModel)
+                .onErrorContinue((e, o) -> log.warn("Health check error", e))
+                .subscribe();
     }
 
 }
