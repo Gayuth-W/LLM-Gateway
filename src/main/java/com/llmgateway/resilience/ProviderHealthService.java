@@ -98,4 +98,25 @@ public class ProviderHealthService {
                 .then();
     }
 
+    //Recalculates the health status of a model based on the latest rolling statistics.
+    private Mono<Void> evaluate(String model, RollingWindow.WindowStats stats) {
+        ProviderStatus next = classify(stats);
+        ProviderStatus previous = statuses.put(model, next);
+        if (previous == null) {
+            previous = ProviderStatus.HEALTHY;
+        }
+        if (previous == next) {
+            return Mono.empty();
+        }
+        double p99 = ring(model).p99();
+        log.info("Model {} health {} -> {} (errorRate={}, p99={}ms)", model, previous, next,
+                String.format("%.2f", stats.errorRate()), String.format("%.0f", p99));
+        ProviderHealthEvent event =
+                new ProviderHealthEvent(model, previous.name(), next.name(), stats.errorRate(), p99);
+        final ProviderStatus from = previous;
+        return healthRepo.save(event)
+                .then(alertService.providerStatusChanged(model, from.name(), next.name()))
+                .onErrorResume(e -> { log.warn("Failed to persist health event", e); return Mono.empty(); });
+    }
+
 }
