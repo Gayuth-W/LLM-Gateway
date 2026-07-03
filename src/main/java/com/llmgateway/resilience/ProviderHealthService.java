@@ -57,4 +57,9 @@ public class ProviderHealthService {
         return props.resilience().healthCheck().rollingWindow();
     }
 
+    /** Current classification (defaults to HEALTHY until proven otherwise). */
+    public ProviderStatus status(String model) {
+        return statuses.getOrDefault(model, ProviderStatus.HEALTHY);
+    }
+
 }
