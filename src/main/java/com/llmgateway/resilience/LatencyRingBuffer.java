@@ -52,4 +52,7 @@ public final class LatencyRingBuffer {
         return snapshot[index];
     }
 
+    public double p50() { return percentile(50); }
+    public double p95() { return percentile(95); }
+    public double p99() { return percentile(99); }
 }
