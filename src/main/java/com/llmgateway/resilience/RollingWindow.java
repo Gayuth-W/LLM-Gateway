@@ -1,5 +1,8 @@
 package com.llmgateway.resilience;
 
+import java.time.Duration;
+import java.util.UUID;
+
 import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Component;
@@ -33,6 +36,27 @@ public class RollingWindow {
         }
     }
 
+    /** Record one observation (success or error) for {@code subject}. */
+    public Mono<Void> record(String subject, boolean error, Duration window) {
+        long now = System.currentTimeMillis();
+        String member = now + "-" + UUID.randomUUID();
+        String totalKey = totalKey(subject);
+        String errorKey = errorKey(subject);
+
+        Mono<Void> recordTotal = redis.opsForZSet().add(totalKey, member, now)
+                .then(evict(totalKey, now - window.toMillis()))
+                .then(redis.expire(totalKey, window.multipliedBy(2)))
+                .then();
+
+        Mono<Void> recordError = error
+                ? redis.opsForZSet().add(errorKey, member, now)
+                    .then(evict(errorKey, now - window.toMillis()))
+                    .then(redis.expire(errorKey, window.multipliedBy(2)))
+                    .then()
+                : Mono.empty();
+
+        return recordTotal.then(recordError);
+    }
 
 
     private Mono<Long> evict(String key, long cutoffMillis) {
