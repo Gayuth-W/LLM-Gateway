@@ -1,37 +1,5 @@
 package com.llmgateway.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.llmgateway.budget.BudgetService;
-import com.llmgateway.budget.CostCalculator;
-import com.llmgateway.config.GatewayProperties;
-import com.llmgateway.dto.ChatMessage;
-import com.llmgateway.dto.LLMRequest;
-import com.llmgateway.dto.LLMResponse;
-import com.llmgateway.exception.BudgetExhaustedException;
-import com.llmgateway.exception.ModelNotAllowedException;
-import com.llmgateway.exception.RateLimitExceededException;
-import com.llmgateway.model.Team;
-import com.llmgateway.model.enums.RequestPriority;
-import com.llmgateway.observability.GatewayMetrics;
-import com.llmgateway.observability.SpanAttributes;
-import com.llmgateway.observability.Telemetry;
-import com.llmgateway.provider.ProviderRegistry;
-import com.llmgateway.ratelimit.RateLimiterService;
-import com.llmgateway.resilience.FallbackRouter;
-import com.llmgateway.service.ContentFilterService;
-import com.llmgateway.service.EnrichmentService;
-import jakarta.validation.Valid;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.codec.ServerSentEvent;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ServerWebExchange;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -40,6 +8,32 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.llmgateway.budget.BudgetService;
+import com.llmgateway.budget.CostCalculator;
+import com.llmgateway.config.GatewayProperties;
+import com.llmgateway.dto.ChatMessage;
+import com.llmgateway.dto.LLMRequest;
+import com.llmgateway.dto.LLMResponse;
+import com.llmgateway.model.Team;
+import com.llmgateway.observability.GatewayMetrics;
+import com.llmgateway.observability.SpanAttributes;
+import com.llmgateway.observability.Telemetry;
+import com.llmgateway.provider.ProviderRegistry;
+import com.llmgateway.ratelimit.RateLimiterService;
+import com.llmgateway.resilience.FallbackRouter;
+import com.llmgateway.service.ContentFilterService;
+import com.llmgateway.service.EnrichmentService;
+
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 /**
  * The single public inference surface, OpenAI-shaped at {@code POST /v1/chat/completions}.
@@ -57,6 +51,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ProxyController {
 
     private static final String PROVIDER = "ollama";
+    private static final int DEFAULT_MAX_TOKENS = 256;
+
+    private final GatewayProperties props;
+    private final ProviderRegistry registry;
+    private final ContentFilterService contentFilter;
     private final EnrichmentService enrichment;
     private final RateLimiterService rateLimiter;
     private final BudgetService budget;
@@ -71,7 +70,9 @@ public class ProxyController {
                            RateLimiterService rateLimiter, BudgetService budget,
                            CostCalculator costCalculator, FallbackRouter router,
                            GatewayMetrics metrics, Telemetry telemetry, ObjectMapper json) {
-
+        this.props = props;
+        this.registry = registry;
+        this.contentFilter = contentFilter;
         this.enrichment = enrichment;
         this.rateLimiter = rateLimiter;
         this.budget = budget;
@@ -179,6 +180,28 @@ public class ProxyController {
                     metrics.recordCost(team.getName(), served, cost);
                 }))
                 .then();
+    }
+
+    // ---------- helpers ----------
+
+    private LLMRequest normalizeModel(LLMRequest request) {
+        if (request.model() != null && !request.model().isBlank()) {
+            return request;
+        }
+        List<String> models = props.modelNames();
+        String fallback = models.isEmpty() ? "llama3.1" : models.get(0);
+        return request.withModel(fallback);
+    }
+
+    private int estimateTokens(LLMRequest request) {
+        int estimate = 0;
+        for (ChatMessage message : request.messages()) {
+            if (message.content() != null) {
+                estimate += message.content().length() / 4; // ~4 chars/token heuristic
+            }
+        }
+        estimate += request.maxTokens() != null ? request.maxTokens() : DEFAULT_MAX_TOKENS;
+        return Math.max(1, estimate);
     }
 
     private Map<String, Object> openAiResponse(String model, String content, int inTok, int outTok) {
