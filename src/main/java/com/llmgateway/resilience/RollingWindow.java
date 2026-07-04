@@ -1,7 +1,10 @@
 package com.llmgateway.resilience;
 
+import org.springframework.data.domain.Range;
 import org.springframework.data.redis.core.ReactiveStringRedisTemplate;
 import org.springframework.stereotype.Component;
+
+import reactor.core.publisher.Mono;
 
 /**
  * A time-based sliding-window counter backed by a Redis sorted set (ZSET).
@@ -25,6 +28,14 @@ public class RollingWindow {
     }
 
 
+    private Mono<Long> evict(String key, long cutoffMillis) {
+        // remove all members with score strictly less than cutoff: range (-inf, cutoff)
+        Range<Double> expired = Range.from(Range.Bound.<Double>unbounded())
+                .to(Range.Bound.exclusive((double) cutoffMillis));
+        return redis.opsForZSet()
+                .removeRangeByScore(key, expired)
+                .defaultIfEmpty(0L);
+    }
 
     private String totalKey(String subject) { return "health:w:" + subject + ":total"; }
     private String errorKey(String subject) { return "health:w:" + subject + ":errors"; }
