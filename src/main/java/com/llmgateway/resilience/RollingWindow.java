@@ -27,6 +27,13 @@ public class RollingWindow {
         this.redis = redis;
     }
 
+    public record WindowStats(long total, long errors) {
+        public double errorRate() {
+            return total == 0 ? 0.0 : (double) errors / (double) total;
+        }
+    }
+
+
 
     private Mono<Long> evict(String key, long cutoffMillis) {
         // remove all members with score strictly less than cutoff: range (-inf, cutoff)
