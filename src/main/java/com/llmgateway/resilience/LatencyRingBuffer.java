@@ -1,5 +1,7 @@
 package com.llmgateway.resilience;
 
+import java.util.Arrays;
+
 /**
  * Fixed-capacity circular buffer of recent latency samples (milliseconds) for one
  * model, used to compute p50/p95/p99 without unbounded memory growth.
@@ -36,6 +38,18 @@ public final class LatencyRingBuffer {
 
     public synchronized long sampleCount() {
         return count;
+    }
+
+    /** Nearest-rank percentile (p in [0,100]). Returns 0 when empty. */
+    public synchronized double percentile(double p) {
+        if (count == 0) {
+            return 0.0;
+        }
+        double[] snapshot = Arrays.copyOf(buffer, count);
+        Arrays.sort(snapshot);
+        int rank = (int) Math.ceil((p / 100.0) * snapshot.length);
+        int index = Math.min(Math.max(rank - 1, 0), snapshot.length - 1);
+        return snapshot[index];
     }
 
 }
