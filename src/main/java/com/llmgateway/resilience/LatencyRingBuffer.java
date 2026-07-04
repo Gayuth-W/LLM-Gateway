@@ -26,4 +26,16 @@ public final class LatencyRingBuffer {
         this.buffer = new double[capacity];
     }
 
+    public synchronized void record(double latencyMs) {
+        buffer[writeIndex] = latencyMs;
+        writeIndex = (writeIndex + 1) % buffer.length;
+        if (count < buffer.length) {
+            count++;
+        }
+    }
+
+    public synchronized long sampleCount() {
+        return count;
+    }
+
 }
