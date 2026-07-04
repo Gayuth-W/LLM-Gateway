@@ -1,0 +1,41 @@
+{
+  "uid": "gw-business",
+  "title": "LLM Gateway — Business",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Token throughput by team (tokens/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (team) (rate(gateway_tokens_input_total[5m]) + rate(gateway_tokens_output_total[5m]))", "legendFormat": "{{team}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Cumulative cost (USD) by team",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (team) (gateway_cost_usd_total)", "legendFormat": "{{team}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Requests by served model (req/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (served_model) (rate(gateway_requests_total[5m]))", "legendFormat": "{{served_model}}" }
+      ]
+    }
+  ]
+}
