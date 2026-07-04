@@ -58,6 +58,21 @@ public class RollingWindow {
         return recordTotal.then(recordError);
     }
 
+    /** Evict expired events then return the current counts. */
+    public Mono<WindowStats> stats(String subject, Duration window) {
+        long cutoff = System.currentTimeMillis() - window.toMillis();
+        String totalKey = totalKey(subject);
+        String errorKey = errorKey(subject);
+
+        return evict(totalKey, cutoff)
+                .then(evict(errorKey, cutoff))
+                .then(Mono.zip(
+                        redis.opsForZSet().size(totalKey),
+                        redis.opsForZSet().size(errorKey).defaultIfEmpty(0L)))
+                .map(t -> new WindowStats(
+                        t.getT1() == null ? 0L : t.getT1(),
+                        t.getT2() == null ? 0L : t.getT2()));
+    }
 
     private Mono<Long> evict(String key, long cutoffMillis) {
         // remove all members with score strictly less than cutoff: range (-inf, cutoff)
