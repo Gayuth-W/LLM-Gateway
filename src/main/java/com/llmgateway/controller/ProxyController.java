@@ -111,7 +111,44 @@ public class ProxyController {
                         : syncResponse(team, request, estimatedTokens));
     }
 
+    // ---------- pre-call gates (shared by both paths) ----------
 
+    /** Runs budget/content/model/rate-limit gates; returns the admitted token estimate. */
+    private Mono<Integer> preflight(Team team, RequestPriority priority, LLMRequest request) {
+        int estimate = estimateTokens(request);
+        return budgetGuard(team)
+                .then(contentFilter.screen(request))
+                .then(Mono.defer(() -> ensureModelAllowed(team, request)))
+                .then(Mono.defer(() -> rateLimiter.tryAdmit(team, priority, estimate)))
+                .flatMap(decision -> decision.allowed()
+                        ? Mono.just(estimate)
+                        : Mono.error(new RateLimitExceededException(
+                                "Rate limit exceeded", decision.retryAfterSeconds())));
+    }
+
+    private Mono<Void> budgetGuard(Team team) {
+        BigDecimal cap = team.getDailyBudgetUsd();
+        if (cap == null || cap.signum() <= 0) {
+            return Mono.empty();
+        }
+        return budget.spentToday(team.getId())
+                .flatMap(spent -> spent.compareTo(cap) >= 0
+                        ? Mono.error(new BudgetExhaustedException(
+                                "Daily budget exhausted for team " + team.getName()))
+                        : Mono.empty());
+    }
+
+    private Mono<Void> ensureModelAllowed(Team team, LLMRequest request) {
+        String model = request.model();
+        if (!registry.isKnown(model)) {
+            return Mono.error(new ModelNotAllowedException("Unknown model: " + model));
+        }
+        if (!team.allows(model)) {
+            return Mono.error(new ModelNotAllowedException(
+                    "Team " + team.getName() + " is not allowed to use model " + model));
+        }
+        return Mono.empty();
+    }
 
     // ---------- non-streaming ----------
 
