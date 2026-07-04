@@ -1,0 +1,41 @@
+{
+  "uid": "gw-performance",
+  "title": "LLM Gateway — Resilience & Performance",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "5s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Circuit breaker state (1 = active)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "resilience4j_circuitbreaker_state", "legendFormat": "{{name}} {{state}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Fallback rate (events/s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (served_model) (rate(gateway_fallback_total[5m]))", "legendFormat": "-> {{served_model}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Retry calls by outcome",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind) (rate(resilience4j_retry_calls_total[5m]))", "legendFormat": "{{kind}}" }
+      ]
+    }
+  ]
+}

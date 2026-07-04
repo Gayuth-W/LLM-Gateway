@@ -1,0 +1,46 @@
+groups:
+  - name: llm-gateway-alerts
+    rules:
+      # Error-rate SLO: >5% of requests ending in error over 2 minutes.
+      - alert: HighGatewayErrorRate
+        expr: |
+          sum(rate(gateway_requests_total{outcome="error"}[2m]))
+            /
+          clamp_min(sum(rate(gateway_requests_total[2m])), 1) > 0.05
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Gateway error rate above 5%"
+          description: "More than 5% of requests have failed over the last 2 minutes."
+
+      # Latency SLO: p99 end-to-end latency over 500ms for 5 minutes.
+      - alert: HighGatewayP99Latency
+        expr: |
+          histogram_quantile(0.99, sum(rate(gateway_request_latency_seconds_bucket[5m])) by (le)) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Gateway p99 latency above 500ms"
+          description: "p99 end-to-end gateway latency has exceeded 500ms for 5 minutes."
+
+      # A circuit breaker has opened.
+      - alert: CircuitBreakerOpen
+        expr: resilience4j_circuitbreaker_state{state="open"} == 1
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Circuit breaker open ({{ $labels.name }})"
+          description: "The circuit breaker for {{ $labels.name }} is OPEN; traffic is being shed."
+
+      # Teams hitting budget exhaustion frequently.
+      - alert: FrequentBudgetExhaustion
+        expr: sum(rate(gateway_requests_total{outcome="budget_exhausted"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Frequent budget-exhausted rejections"
+          description: "Requests are being rejected for budget exhaustion at a sustained rate."

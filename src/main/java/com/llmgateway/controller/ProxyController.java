@@ -1,5 +1,23 @@
 package com.llmgateway.controller;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ServerWebExchange;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmgateway.budget.BudgetService;
 import com.llmgateway.budget.CostCalculator;
@@ -20,26 +38,10 @@ import com.llmgateway.ratelimit.RateLimiterService;
 import com.llmgateway.resilience.FallbackRouter;
 import com.llmgateway.service.ContentFilterService;
 import com.llmgateway.service.EnrichmentService;
+
 import jakarta.validation.Valid;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.codec.ServerSentEvent;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-
-import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The single public inference surface, OpenAI-shaped at {@code POST /v1/chat/completions}.
@@ -57,6 +59,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ProxyController {
 
     private static final String PROVIDER = "ollama";
+    private static final int DEFAULT_MAX_TOKENS = 256;
+
+    private final GatewayProperties props;
+    private final ProviderRegistry registry;
+    private final ContentFilterService contentFilter;
     private final EnrichmentService enrichment;
     private final RateLimiterService rateLimiter;
     private final BudgetService budget;
@@ -71,7 +78,9 @@ public class ProxyController {
                            RateLimiterService rateLimiter, BudgetService budget,
                            CostCalculator costCalculator, FallbackRouter router,
                            GatewayMetrics metrics, Telemetry telemetry, ObjectMapper json) {
-
+        this.props = props;
+        this.registry = registry;
+        this.contentFilter = contentFilter;
         this.enrichment = enrichment;
         this.rateLimiter = rateLimiter;
         this.budget = budget;
@@ -82,6 +91,64 @@ public class ProxyController {
         this.json = json;
     }
 
+    @PostMapping(value = "/chat/completions",
+            produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
+    public Mono<ResponseEntity<?>> chatCompletions(ServerWebExchange exchange,
+                                                   @Valid @RequestBody LLMRequest body) {
+        Team team = exchange.getAttribute(com.llmgateway.filter.RequestContext.TEAM);
+        RequestPriority priority = exchange.getAttributeOrDefault(
+                com.llmgateway.filter.RequestContext.PRIORITY, RequestPriority.HIGH);
+        LLMRequest request = normalizeModel(body);
+
+        telemetry.tag(SpanAttributes.TEAM_NAME, team.getName());
+        telemetry.tag(SpanAttributes.REQUESTED_MODEL, request.model());
+        telemetry.tag(SpanAttributes.PRIORITY, priority.name());
+        telemetry.tag(SpanAttributes.STREAMING, Boolean.toString(request.stream()));
+
+        return preflight(team, priority, request).flatMap(estimatedTokens ->
+                request.stream()
+                        ? Mono.just(streamingResponse(team, request, estimatedTokens))
+                        : syncResponse(team, request, estimatedTokens));
+    }
+
+    // ---------- pre-call gates (shared by both paths) ----------
+
+    /** Runs budget/content/model/rate-limit gates; returns the admitted token estimate. */
+    private Mono<Integer> preflight(Team team, RequestPriority priority, LLMRequest request) {
+        int estimate = estimateTokens(request);
+        return budgetGuard(team)
+                .then(contentFilter.screen(request))
+                .then(Mono.defer(() -> ensureModelAllowed(team, request)))
+                .then(Mono.defer(() -> rateLimiter.tryAdmit(team, priority, estimate)))
+                .flatMap(decision -> decision.allowed()
+                        ? Mono.just(estimate)
+                        : Mono.error(new RateLimitExceededException(
+                                "Rate limit exceeded", decision.retryAfterSeconds())));
+    }
+
+    private Mono<Void> budgetGuard(Team team) {
+        BigDecimal cap = team.getDailyBudgetUsd();
+        if (cap == null || cap.signum() <= 0) {
+            return Mono.empty();
+        }
+        return budget.spentToday(team.getId())
+                .flatMap(spent -> spent.compareTo(cap) >= 0
+                        ? Mono.error(new BudgetExhaustedException(
+                                "Daily budget exhausted for team " + team.getName()))
+                        : Mono.empty());
+    }
+
+    private Mono<Void> ensureModelAllowed(Team team, LLMRequest request) {
+        String model = request.model();
+        if (!registry.isKnown(model)) {
+            return Mono.error(new ModelNotAllowedException("Unknown model: " + model));
+        }
+        if (!team.allows(model)) {
+            return Mono.error(new ModelNotAllowedException(
+                    "Team " + team.getName() + " is not allowed to use model " + model));
+        }
+        return Mono.empty();
+    }
 
     // ---------- non-streaming ----------
 
@@ -179,6 +246,28 @@ public class ProxyController {
                     metrics.recordCost(team.getName(), served, cost);
                 }))
                 .then();
+    }
+
+    // ---------- helpers ----------
+
+    private LLMRequest normalizeModel(LLMRequest request) {
+        if (request.model() != null && !request.model().isBlank()) {
+            return request;
+        }
+        List<String> models = props.modelNames();
+        String fallback = models.isEmpty() ? "llama3.1" : models.get(0);
+        return request.withModel(fallback);
+    }
+
+    private int estimateTokens(LLMRequest request) {
+        int estimate = 0;
+        for (ChatMessage message : request.messages()) {
+            if (message.content() != null) {
+                estimate += message.content().length() / 4; // ~4 chars/token heuristic
+            }
+        }
+        estimate += request.maxTokens() != null ? request.maxTokens() : DEFAULT_MAX_TOKENS;
+        return Math.max(1, estimate);
     }
 
     private Map<String, Object> openAiResponse(String model, String content, int inTok, int outTok) {
