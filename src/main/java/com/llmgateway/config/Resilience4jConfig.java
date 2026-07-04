@@ -7,6 +7,9 @@ import com.llmgateway.exception.UpstreamException;
 
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.core.IntervalFunction;
+import io.github.resilience4j.retry.RetryConfig;
+import io.github.resilience4j.retry.RetryRegistry;
 
 /**
  * Programmatic Resilience4j registries. Per-model instances are obtained by name
@@ -37,4 +40,15 @@ public class Resilience4jConfig {
         return CircuitBreakerRegistry.of(config);
     }
 
+    @Bean
+    public RetryRegistry retryRegistry(GatewayProperties props) {
+        var r = props.resilience().retry();
+        RetryConfig config = RetryConfig.custom()
+                .maxAttempts(r.maxAttempts())
+                .intervalFunction(IntervalFunction.ofExponentialBackoff(
+                        r.initialBackoff().toMillis(), r.multiplier()))
+                .retryOnException(t -> t instanceof UpstreamException ue && ue.isRetryable())
+                .build();
+        return RetryRegistry.of(config);
+    }
 }
