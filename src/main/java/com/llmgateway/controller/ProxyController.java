@@ -12,8 +12,11 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ServerWebExchange;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.llmgateway.budget.BudgetService;
@@ -22,7 +25,11 @@ import com.llmgateway.config.GatewayProperties;
 import com.llmgateway.dto.ChatMessage;
 import com.llmgateway.dto.LLMRequest;
 import com.llmgateway.dto.LLMResponse;
+import com.llmgateway.exception.BudgetExhaustedException;
+import com.llmgateway.exception.ModelNotAllowedException;
+import com.llmgateway.exception.RateLimitExceededException;
 import com.llmgateway.model.Team;
+import com.llmgateway.model.enums.RequestPriority;
 import com.llmgateway.observability.GatewayMetrics;
 import com.llmgateway.observability.SpanAttributes;
 import com.llmgateway.observability.Telemetry;
@@ -32,6 +39,7 @@ import com.llmgateway.resilience.FallbackRouter;
 import com.llmgateway.service.ContentFilterService;
 import com.llmgateway.service.EnrichmentService;
 
+import jakarta.validation.Valid;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -82,6 +90,27 @@ public class ProxyController {
         this.telemetry = telemetry;
         this.json = json;
     }
+
+    @PostMapping(value = "/chat/completions",
+            produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
+    public Mono<ResponseEntity<?>> chatCompletions(ServerWebExchange exchange,
+                                                   @Valid @RequestBody LLMRequest body) {
+        Team team = exchange.getAttribute(com.llmgateway.filter.RequestContext.TEAM);
+        RequestPriority priority = exchange.getAttributeOrDefault(
+                com.llmgateway.filter.RequestContext.PRIORITY, RequestPriority.HIGH);
+        LLMRequest request = normalizeModel(body);
+
+        telemetry.tag(SpanAttributes.TEAM_NAME, team.getName());
+        telemetry.tag(SpanAttributes.REQUESTED_MODEL, request.model());
+        telemetry.tag(SpanAttributes.PRIORITY, priority.name());
+        telemetry.tag(SpanAttributes.STREAMING, Boolean.toString(request.stream()));
+
+        return preflight(team, priority, request).flatMap(estimatedTokens ->
+                request.stream()
+                        ? Mono.just(streamingResponse(team, request, estimatedTokens))
+                        : syncResponse(team, request, estimatedTokens));
+    }
+
 
 
     // ---------- non-streaming ----------
