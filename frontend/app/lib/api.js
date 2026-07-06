@@ -71,3 +71,53 @@ export async function chat({ apiKey, model, prompt, priority = 'high' }) {
   };
 }
 
+/**
+ * Streaming completion (SSE). Calls onDelta for each token chunk and onDone at the end.
+ * Throws on a non-2xx status so the caller can surface the rejection.
+ */
+export async function streamChat({ apiKey, model, prompt, priority = 'high' }, onDelta, onDone) {
+  // Streaming goes through the Route Handler at /api/chat so the stream is not buffered.
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      apiKey,
+      priority,
+      payload: { model, messages: [{ role: 'user', content: prompt }], stream: true },
+    }),
+    cache: 'no-store',
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    let body = null;
+    if (text) { try { body = JSON.parse(text); } catch { } }
+    const err = new Error((body && body.message) || `Request failed (${res.status})`);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t.startsWith('data:')) continue;
+      const data = t.slice(5).trim();
+      if (data === '[DONE]') { onDone && onDone(); return; }
+      try {
+        const chunk = JSON.parse(data);
+        const delta = chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content;
+        if (delta) onDelta(delta);
+      } catch { /* ignore keep-alive / non-JSON lines */ }
+    }
+  }
+  onDone && onDone();
+}
