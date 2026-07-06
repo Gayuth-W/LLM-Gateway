@@ -20,3 +20,6 @@ Thumbs.db
 *.log
 docker/grafana/data/
 results/
+
+
+frontend/node_modules/

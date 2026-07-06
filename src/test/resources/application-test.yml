@@ -1,0 +1,83 @@
+# Test profile. Infra URLs (r2dbc/flyway/redis) and the Ollama base-url are injected
+# at runtime from Testcontainers / WireMock via @DynamicPropertySource.
+spring:
+  r2dbc:
+    pool:
+      initial-size: 1
+      max-size: 5
+
+management:
+  tracing:
+    sampling:
+      probability: 0.0          # no span export in tests
+  otlp:
+    tracing:
+      endpoint: http://localhost:4318/v1/traces
+
+gateway:
+  ollama:
+    base-url: http://localhost:11434   # overridden by WireMock in tests
+    request-timeout: 5s
+    connect-timeout: 2s
+
+  models:
+    - name: llama3.1
+      tier: standard
+    - name: mistral
+      tier: standard
+    - name: llama3.2:1b
+      tier: fast
+
+  pricing:
+    "[llama3.1]":
+      input-per-1k: 0.00050
+      output-per-1k: 0.00150
+    mistral:
+      input-per-1k: 0.00025
+      output-per-1k: 0.00075
+    "llama3.2:1b":
+      input-per-1k: 0.00010
+      output-per-1k: 0.00020
+
+  fallback-chains:
+    "[llama3.1]":
+      - mistral
+      - "llama3.2:1b"
+    mistral:
+      - "llama3.2:1b"
+
+  enrichment:
+    profiles:
+      enterprise:
+        system-prefix: "You are ACME's assistant."
+        disclaimer-suffix: "\n\n— ACME"
+      internal:
+        system-prefix: ""
+        disclaimer-suffix: ""
+
+  resilience:
+    health-check:
+      interval: 1h               # effectively off during tests
+      rolling-window: 5m
+      degraded-error-rate: 0.20
+      down-error-rate: 0.50
+      ping-num-predict: 1
+    retry:
+      max-attempts: 2
+      initial-backoff: 20ms
+      multiplier: 2.0
+      max-backoff: 200ms
+    circuit-breaker:
+      sliding-window-size: 10
+      failure-rate-threshold: 50
+      minimum-number-of-calls: 5
+      wait-duration-in-open-state: 2s
+      permitted-calls-in-half-open: 2
+
+  budget:
+    flush-interval: 1h           # don't auto-flush mid-test; tests assert via Redis/API
+    warn-threshold-pct: 80
+
+  alerts:
+    slack:
+      webhook-url: ""
