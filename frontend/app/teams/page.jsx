@@ -3,6 +3,11 @@
 import { useEffect, useState } from 'react';
 import { getTeams, createTeam, updateLimits, updateBudget } from '../lib/api';
 
+function usd(v) {
+  const n = Number(v);
+  if (Number.isNaN(n)) return '—';
+  return '$' + n.toFixed(n < 0.01 ? 6 : 2);
+}
 
 const EMPTY_CREATE = {
   apiKey: '', name: '', allowedModels: 'llama3.1,gemma3:1b',
