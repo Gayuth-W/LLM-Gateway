@@ -46,6 +46,24 @@ export default function TeamsPage() {
     } catch (e) { setMsg('Create failed: ' + e.message); }
   }
 
+  async function saveEdit() {
+    setMsg(null);
+    try {
+      await updateLimits(editing.id, {
+        rpmLimit: Number(editing.rpmLimit),
+        tpmLimit: Number(editing.tpmLimit),
+        lowPriorityRpm: Number(editing.lowPriorityRpm),
+      });
+      await updateBudget(editing.id, {
+        dailyBudgetUsd: Number(editing.dailyBudgetUsd),
+        monthlyBudgetUsd: Number(editing.monthlyBudgetUsd),
+      });
+      setEditing(null);
+      setMsg('Team updated.');
+      load();
+    } catch (e) { setMsg('Update failed: ' + e.message); }
+  }
+
   return (
     <div className="page">
       <div className="page-head with-action">
