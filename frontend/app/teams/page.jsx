@@ -25,6 +25,27 @@ export default function TeamsPage() {
   }
   useEffect(() => { load(); }, []);
 
+  async function submitCreate() {
+    setMsg(null);
+    try {
+      await createTeam({
+        apiKey: form.apiKey.trim(),
+        name: form.name.trim(),
+        allowedModels: form.allowedModels.split(',').map((s) => s.trim()).filter(Boolean),
+        rpmLimit: Number(form.rpmLimit),
+        tpmLimit: Number(form.tpmLimit),
+        lowPriorityRpm: Number(form.lowPriorityRpm),
+        dailyBudgetUsd: Number(form.dailyBudgetUsd),
+        monthlyBudgetUsd: Number(form.monthlyBudgetUsd),
+        enrichmentProfile: form.enrichmentProfile.trim(),
+      });
+      setShowCreate(false);
+      setForm(EMPTY_CREATE);
+      setMsg('Team created.');
+      load();
+    } catch (e) { setMsg('Create failed: ' + e.message); }
+  }
+
   return (
     <div className="page">
       <div className="page-head with-action">
