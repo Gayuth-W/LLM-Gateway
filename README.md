@@ -14,12 +14,13 @@ The backend is **[Ollama](https://ollama.com)** running locally, so the whole th
 2. [The request lifecycle](#the-request-lifecycle)
 3. [Feature tour](#feature-tour)
 4. [Running it](#running-it)
-5. [API reference](#api-reference)
-6. [Configuration](#configuration)
-7. [Observability](#observability)
-8. [Testing & load](#testing--load)
-9. [Data structures & algorithms used](#data-structures--algorithms-used)
-10. [Project layout](#project-layout)
+5. [Operator auth & RBAC](#operator-auth--rbac)
+6. [API reference](#api-reference)
+7. [Configuration](#configuration)
+8. [Observability](#observability)
+9. [Testing & load](#testing--load)
+10. [Data structures & algorithms used](#data-structures--algorithms-used)
+11. [Project layout](#project-layout)
 
 ---
 
@@ -160,6 +161,100 @@ mvn spring-boot:run
 | `sk-internal-key`   | Internal Tools  | 60 rpm / 60k tpm / $5/day    | `llama3.1`, `gemma3:1b`                 |
 | `sk-free-key`       | Free Tier       | **5 rpm** / 2k tpm / **$0.01/day** | `gemma3:1b` only — easy to trip 429/402 |
 
+### Seeded operator accounts
+
+Console sign-in, seeded by `V4__admin_users.sql`. Like the team keys above, these are
+intentionally well-known for local use — rotate them before the stack is reachable from
+anywhere but localhost.
+
+| Username   | Password      | Role       |
+|------------|---------------|------------|
+| `admin`    | `admin123`    | `ADMIN`    |
+| `operator` | `operator123` | `OPERATOR` |
+| `viewer`   | `viewer123`   | `VIEWER`   |
+
+---
+
+## Operator auth & RBAC
+
+### Two credentials, deliberately not merged
+
+| Surface       | Credential            | Why                                                              |
+|---------------|-----------------------|------------------------------------------------------------------|
+| `/v1/**`      | Team API key (`sk-…`) | Machine clients. A completions call should not need a login/refresh loop. |
+| `/admin/**`   | Operator JWT (1h)     | Humans. Short-lived, carries a role, and names the actor in the audit trail. |
+
+Adding JWT to `/v1/**` was considered and rejected: key rotation and token expiry solve
+different problems, and every LLM API consumers already expect a long-lived key there.
+`TeamAuthFilter` is untouched by this change.
+
+### The role model
+
+Three roles, derived from the blast radius of the endpoints that actually exist:
+
+| Role       | Reaches                                                | Can cause                          |
+|------------|--------------------------------------------------------|------------------------------------|
+| `VIEWER`   | all `GET` — teams, provider health, spend reports       | nothing                            |
+| `OPERATOR` | the above + all `PATCH` — limits, budgets, alert thresholds | a cost spike or an outage       |
+| `ADMIN`    | the above + `POST /admin/teams`                        | issuing a credential               |
+
+The line that matters is the last one. Tuning a number and minting an API key are
+different privileges, so team creation is the only `ADMIN`-only handler. A separate
+`FINANCE` role splitting budgets from limits was considered and dropped — both are
+cost/availability controls with the same blast radius, so the split would be org-chart
+theatre rather than a security boundary.
+
+The hierarchy (`ADMIN > OPERATOR > VIEWER`) is expanded into `ROLE_*` authorities in
+`SecurityUtils.authorities()` rather than configured through Spring Security's
+`RoleHierarchy`. Keeping it in `Role.implied()` makes it unit-testable (`RoleTest`) and
+visible where roles are defined, instead of depending on expression-handler wiring
+taking effect.
+
+### What this fixed
+
+Before this change every `/admin/**` route was open — anyone could `POST /admin/teams`
+and mint themselves a key with a $500 budget. Worse, the audit actor came from an
+`X-Admin-User` header that the caller controlled, so `audit_logs` could be made to name
+someone who had done nothing. The actor is now read from the verified JWT subject; the
+header is ignored (`RbacIntegrationTest.spoofedAdminUserHeaderIsIgnored`).
+
+### Endpoints
+
+| Method & path        | Auth        | Purpose                                        |
+|----------------------|-------------|------------------------------------------------|
+| `POST /auth/login`   | none        | `{username, password}` → token + role          |
+| `GET /auth/me`       | any role    | Identity behind the presented token            |
+
+```bash
+TOKEN=$(curl -s localhost:8080/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"operator","password":"operator123"}' | jq -r .token)
+
+curl -s localhost:8080/admin/teams -H "Authorization: Bearer $TOKEN"
+```
+
+### Design calls, and what was left out
+
+- **HS256, not RS256.** This service is the only issuer and the only verifier, so an
+  asymmetric key pair plus JWKS would be scaffolding around a single HMAC key. The
+  secret must be ≥32 bytes or the application refuses to start.
+- **No refresh token, no revocation list.** A token is valid until it expires. That
+  makes verification stateless (no DB read per request) at the cost of not being able
+  to kill a session early — the TTL is the bound. Rotation plus a Redis denylist is the
+  upgrade path if it's ever needed.
+- **BCrypt runs on `boundedElastic`.** Verification is CPU-bound at ~50–100 ms; inline
+  on a Netty event loop it would stall every other request sharing that thread,
+  including proxied completions.
+- **Login is not rate limited.** Known gap, stated rather than hidden: the endpoint is
+  open to online password guessing. Bucket4j is already in the stack and a per-username
+  and per-IP bucket in front of the handler is the honest fix.
+- **The console keeps its token in `localStorage`,** which is readable by injected
+  script. An httpOnly cookie plus CSRF handling is stronger; it was skipped to keep the
+  gateway a stateless bearer API. The short TTL is the mitigation actually in place.
+- **Unknown user and wrong password are indistinguishable,** including timing — a dummy
+  BCrypt comparison runs when the username doesn't exist, so the endpoint can't be used
+  to enumerate accounts.
+
 ---
 
 ## API reference
@@ -207,18 +302,24 @@ Streaming (`"stream": true`) returns `text/event-stream` with `chat.completion.c
 
 ### Admin
 
-| Method & path                              | Purpose                                  |
-|--------------------------------------------|------------------------------------------|
-| `GET /admin/teams`                         | List teams with live spend               |
-| `GET /admin/teams/{id}`                    | One team                                 |
-| `POST /admin/teams`                        | Create a team                            |
-| `PATCH /admin/teams/{id}/limits`           | Update RPM/TPM/low-priority RPM          |
-| `PATCH /admin/teams/{id}/budget`           | Update daily/monthly budget              |
-| `PATCH /admin/teams/{id}/alert-threshold`  | Update alert % + Slack channel           |
-| `GET /admin/providers/health`              | Per-model status, error rate, p99        |
-| `GET /admin/spending?from=&to=`            | Spend rollup by team/model               |
+All admin routes require `Authorization: Bearer <operator-jwt>`. Missing or expired token
+→ `401 unauthorized`; valid token with an insufficient role → `403 forbidden`, both in the
+standard error envelope.
 
-> Admin routes are intentionally unauthenticated in this build for easy local use; in production they sit behind separate operator auth.
+| Method & path                              | Min role   | Purpose                                  |
+|--------------------------------------------|------------|------------------------------------------|
+| `GET /admin/teams`                         | `VIEWER`   | List teams with live spend               |
+| `GET /admin/teams/{id}`                    | `VIEWER`   | One team                                 |
+| `POST /admin/teams`                        | `ADMIN`    | Create a team (issues an API key)        |
+| `PATCH /admin/teams/{id}/limits`           | `OPERATOR` | Update RPM/TPM/low-priority RPM          |
+| `PATCH /admin/teams/{id}/budget`           | `OPERATOR` | Update daily/monthly budget              |
+| `PATCH /admin/teams/{id}/alert-threshold`  | `OPERATOR` | Update alert % + Slack channel           |
+| `GET /admin/providers/health`              | `VIEWER`   | Per-model status, error rate, p99        |
+| `GET /admin/spending?from=&to=`            | `VIEWER`   | Spend rollup by team/model               |
+
+> `/admin/**` requires a token at the path level *and* carries a `@PreAuthorize` per
+> handler. The path rule is the safety net: an admin endpoint added later without an
+> annotation still cannot be called anonymously.
 
 ---
 
@@ -304,6 +405,7 @@ src/main/java/com/llmgateway/
 ├── budget/         Cost calculator + budget service (Redis + flush queue)
 ├── resilience/     RollingWindow, LatencyRingBuffer, ProviderHealthService, FallbackRouter, CB events
 ├── repository/     Reactive (R2DBC) repositories
+├── security/       JWT mint/verify, auth filter, RBAC filter chain, 401/403 handlers
 └── service/        Team/Enrichment/Alert/Audit/ContentFilter services
 src/main/resources/  application*.yml + Flyway migrations (schema + demo seed)
 src/test/            Testcontainers integration tests + WireMock helper + Gatling sim
@@ -315,3 +417,10 @@ docker/              Prometheus config + alert rules + Grafana provisioning & da
 ### A note on the build
 
 This repository is written to compile and run as a unit, but the most environment- and version-sensitive spots are: the **Bucket4j 8.7.0 Lettuce async proxy-manager** wiring (`RedisConfig`, `RateLimiterService`), **Ollama NDJSON streaming decode** (`OllamaProvider`), and the **OTLP→Jaeger** exporter. If you bump library versions, re-check those three first.
+
+One more since the auth work: adding `spring-boot-starter-security` closes every route by
+default. `SecurityConfig` re-opens `/`, `/auth/login`, `/v1/**` and the actuator scrape
+endpoints explicitly, and leaves `anyExchange()` permitted so unmapped paths still 404
+rather than 401. Locking down `/actuator/prometheus` is a silent failure — the app runs,
+Prometheus just stops scraping and every Grafana panel flatlines — so
+`RootAndErrorIntegrationTest` asserts it stays public.
