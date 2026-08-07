@@ -1,10 +1,27 @@
 // All calls hit same-origin /gateway/* which next.config.js proxies to the gateway.
+import { getToken, clearSession, notifyExpired } from './auth';
+
 const BASE = '/gateway';
 
+/**
+ * Two credentials live in this console and they are not interchangeable:
+ *
+ *   - the OPERATOR JWT attached below, which authorises /admin/** and /auth/me;
+ *   - a TEAM API key, typed into the playground, which authorises /v1/**.
+ *
+ * `req` is for the first. `chat`/`streamChat` at the bottom of this file are for
+ * the second and deliberately do not attach the operator token.
+ */
 async function req(path, options = {}) {
+  const { skipAuthRedirect = false, ...init } = options;
+  const token = getToken();
   const res = await fetch(BASE + path, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init.headers || {}),
+    },
     cache: 'no-store',
   });
   const text = await res.text();
@@ -13,6 +30,14 @@ async function req(path, options = {}) {
     try { body = JSON.parse(text); } catch { body = text; }
   }
   if (!res.ok) {
+    // 401 means the token is missing, expired, or bogus. Drop the session and let
+    // the app fall back to the sign-in screen rather than showing a broken page.
+    // 403 is different: the session is fine, the role just is not enough, so it
+    // surfaces as an ordinary error the page can explain.
+    if (res.status === 401 && !skipAuthRedirect) {
+      clearSession();
+      notifyExpired();
+    }
     const err = new Error((body && body.message) || `Request failed (${res.status})`);
     err.status = res.status;
     err.body = body;
@@ -20,6 +45,20 @@ async function req(path, options = {}) {
   }
   return body;
 }
+
+// ---- operator session ----
+
+export function login(username, password) {
+  return req('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+    // A failed sign-in is a 401 by definition; it should render an inline message,
+    // not trigger the expired-session redirect.
+    skipAuthRedirect: true,
+  });
+}
+
+export function getMe() { return req('/auth/me'); }
 
 export function getGatewayInfo() { return req('/'); }
 export function getTeams() { return req('/admin/teams'); }
