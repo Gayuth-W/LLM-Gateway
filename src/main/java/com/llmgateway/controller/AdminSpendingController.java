@@ -4,6 +4,7 @@ import com.llmgateway.dto.admin.SpendingReport;
 import com.llmgateway.dto.admin.TeamSpendingRow;
 import com.llmgateway.repository.SpendingRecordRepository;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -17,9 +18,13 @@ import java.util.List;
 /**
  * Spending dashboard data: per-team/model rollups over a date range, plus the range
  * total. Backed by the durable spending_records table (the async-flushed rollup).
+ *
+ * Spend is commercially sensitive but read-only, so it sits at VIEWER alongside
+ * the other reports rather than getting a role of its own.
  */
 @RestController
 @RequestMapping("/admin/spending")
+@PreAuthorize("hasRole('VIEWER')")
 public class AdminSpendingController {
 
     private final SpendingRecordRepository spendingRepository;
