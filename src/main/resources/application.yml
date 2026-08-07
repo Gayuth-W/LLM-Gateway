@@ -100,6 +100,22 @@ gateway:
         system-prefix: ""
         disclaimer-suffix: ""
 
+  # ---------------------------------------------------------------
+  # Operator auth for /admin/**. The /v1/** proxy is unaffected: it keeps
+  # authenticating machine clients with long-lived team API keys.
+  # ---------------------------------------------------------------
+  security:
+    jwt:
+      # HS256 signing key. Must be >= 32 bytes or the application refuses to
+      # start. The default below is a LOCAL DEVELOPMENT value and is checked in
+      # deliberately so `docker-compose up` works out of the box -- override it
+      # everywhere else with GATEWAY_SECURITY_JWT_SECRET.
+      secret: ${GATEWAY_SECURITY_JWT_SECRET:local-dev-only-secret-change-me-please-32bytes}
+      # Short-lived by design: there is no refresh token and no revocation list,
+      # so the TTL is the only bound on a leaked token.
+      ttl: 1h
+      issuer: llm-gateway
+
   resilience:
     health-check:
       interval: 30s
