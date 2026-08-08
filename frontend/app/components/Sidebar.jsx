@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import GatewayStatus from './GatewayStatus';
+import { useAuth } from './AuthProvider';
 
 const NAV = [
   { href: '/', label: 'Playground' },
@@ -13,6 +14,8 @@ const NAV = [
 
 export default function Sidebar() {
   const path = usePathname();
+  const { user, signOut } = useAuth();
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -33,6 +36,17 @@ export default function Sidebar() {
 
       <div className="sidebar-foot">
         <GatewayStatus />
+
+        {user && (
+          <div className="session">
+            <div className="session-who">
+              <div className="session-name">{user.username}</div>
+              <span className={`role-badge ${user.role.toLowerCase()}`}>{user.role}</span>
+            </div>
+            <button className="btn tiny" onClick={signOut}>Sign out</button>
+          </div>
+        )}
+
         <div className="foot-key">Java 21 · Spring WebFlux · Ollama</div>
       </div>
     </aside>
