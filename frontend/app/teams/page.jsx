@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getTeams, createTeam, updateLimits, updateBudget } from '../lib/api';
+import { useAuth } from '../components/AuthProvider';
 
 function usd(v) {
   const n = Number(v);
@@ -16,6 +17,13 @@ const EMPTY_CREATE = {
 };
 
 export default function TeamsPage() {
+  // Hiding controls the current role cannot use. This is presentation only: the
+  // gateway enforces the same rules and answers 403 to anyone who calls the
+  // endpoints directly.
+  const { user, can } = useAuth();
+  const canEdit = can('OPERATOR');   // limits + budgets
+  const canCreate = can('ADMIN');    // issues a team API key
+
   const [teams, setTeams] = useState(null);
   const [error, setError] = useState(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -48,7 +56,11 @@ export default function TeamsPage() {
       setForm(EMPTY_CREATE);
       setMsg('Team created.');
       load();
-    } catch (e) { setMsg('Create failed: ' + e.message); }
+    } catch (e) {
+      setMsg(e.status === 403
+        ? 'Create failed: your role does not permit issuing API keys.'
+        : 'Create failed: ' + e.message);
+    }
   }
 
   async function saveEdit() {
@@ -66,7 +78,11 @@ export default function TeamsPage() {
       setEditing(null);
       setMsg('Team updated.');
       load();
-    } catch (e) { setMsg('Update failed: ' + e.message); }
+    } catch (e) {
+      setMsg(e.status === 403
+        ? 'Update failed: your role does not permit changing limits or budgets.'
+        : 'Update failed: ' + e.message);
+    }
   }
 
   return (
@@ -78,12 +94,28 @@ export default function TeamsPage() {
         </div>
         <div className="head-actions">
           <button className="btn ghost" onClick={load}>Refresh</button>
-          <button className="btn primary" onClick={() => setShowCreate((v) => !v)}>New team</button>
+          {canCreate && (
+            <button className="btn primary" onClick={() => setShowCreate((v) => !v)}>New team</button>
+          )}
         </div>
       </div>
 
       {msg && <div className="banner">{msg}</div>}
       {error && <div className="banner bad">Could not load teams: {error}</div>}
+
+      {!canEdit && (
+        <div className="banner gate-note">
+          You are signed in as <span className="mono">{user?.role}</span>, which can read
+          this page but not change it. Limits and budgets need OPERATOR; creating a team
+          needs ADMIN.
+        </div>
+      )}
+      {canEdit && !canCreate && (
+        <div className="banner gate-note">
+          You can change limits and budgets. Creating a team issues an API key, which
+          needs ADMIN.
+        </div>
+      )}
 
       {showCreate && (
         <section className="card create-card">
@@ -138,11 +170,13 @@ export default function TeamsPage() {
                       <div className="util"><span className={`util-fill${util >= 1 ? ' full' : ''}`} style={{ width: `${util * 100}%` }} /></div>
                     </td>
                     <td className="num">
-                      <button className="btn tiny" onClick={() => setEditing({
-                        id: t.id, name: t.name,
-                        rpmLimit: t.rpmLimit, tpmLimit: t.tpmLimit, lowPriorityRpm: t.lowPriorityRpm,
-                        dailyBudgetUsd: t.dailyBudgetUsd, monthlyBudgetUsd: t.monthlyBudgetUsd,
-                      })}>Edit</button>
+                      {canEdit && (
+                        <button className="btn tiny" onClick={() => setEditing({
+                          id: t.id, name: t.name,
+                          rpmLimit: t.rpmLimit, tpmLimit: t.tpmLimit, lowPriorityRpm: t.lowPriorityRpm,
+                          dailyBudgetUsd: t.dailyBudgetUsd, monthlyBudgetUsd: t.monthlyBudgetUsd,
+                        })}>Edit</button>
+                      )}
                     </td>
                   </tr>
                 );
