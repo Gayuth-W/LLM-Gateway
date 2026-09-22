@@ -2,14 +2,21 @@ package com.llmgateway.controller;
 
 import com.llmgateway.dto.admin.ProviderHealthView;
 import com.llmgateway.resilience.ProviderHealthService;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
 
-/** Admin visibility into per-model health (status, error rate, p99 latency, samples). */
+/**
+ * Admin visibility into per-model health (status, error rate, p99 latency, samples).
+ *
+ * Read-only, so VIEWER is enough. ADMIN and OPERATOR reach it through the role
+ * hierarchy -- both imply VIEWER.
+ */
 @RestController
 @RequestMapping("/admin/providers")
+@PreAuthorize("hasRole('VIEWER')")
 public class AdminProviderController {
 
     private final ProviderHealthService healthService;

@@ -64,6 +64,10 @@ services:
     build: .
     environment:
       SPRING_PROFILES_ACTIVE: docker
+      # HS256 signing key for operator JWTs. Must be at least 32 bytes; the
+      # gateway refuses to start otherwise. Replace this before exposing the
+      # stack beyond localhost.
+      GATEWAY_SECURITY_JWT_SECRET: ${GATEWAY_SECURITY_JWT_SECRET:-local-dev-only-secret-change-me-please-32bytes}
     ports:
       - "8080:8080"
     extra_hosts:
